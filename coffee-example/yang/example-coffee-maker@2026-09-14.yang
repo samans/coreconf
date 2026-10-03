@@ -1,0 +1,96 @@
+module example-coffee-maker {
+  yang-version 1.1;
+  namespace "urn:example:coffee-maker";
+  prefix coffee;
+
+  organization
+    "CORECONF Coffee Example";
+  contact
+    "editor@example.com";
+  description
+    "A minimal YANG model to demonstrate CORECONF (RFC 8040-style
+     management over CoAP, per draft-ietf-core-comi). The model exposes
+     a single coffee maker whose power state can be turned on or off,
+     plus some read-only operational state.";
+
+  revision 2026-09-14 {
+    description "Initial revision.";
+    reference "draft-ietf-core-comi-21";
+  }
+
+  identity brew-state {
+    description "Base identity for the current brewing state.";
+  }
+  identity idle {
+    base brew-state;
+    description "The coffee maker is powered on but not brewing.";
+  }
+  identity brewing {
+    base brew-state;
+    description "The coffee maker is actively brewing.";
+  }
+  identity off {
+    base brew-state;
+    description "The coffee maker is powered off.";
+  }
+
+  container coffee-maker {
+    description "Top-level container for the coffee maker.";
+
+    // ---- Configuration (writable) ----
+    leaf power {
+      type boolean;
+      default false;
+      description
+        "Turns the coffee maker on (true) or off (false).
+         This is the primary configuration knob demonstrated
+         by the CORECONF client.";
+    }
+
+    leaf cups {
+      type uint8 {
+        range "1..12";
+      }
+      default 1;
+      description "Number of cups to brew when powered on.";
+    }
+
+    leaf strength {
+      type enumeration {
+        enum mild;
+        enum medium;
+        enum strong;
+      }
+      default medium;
+      description "Requested brew strength.";
+    }
+
+    // ---- Operational state (read-only) ----
+    leaf state {
+      type identityref {
+        base brew-state;
+      }
+      config false;
+      description "Current operational state of the coffee maker.";
+    }
+
+    leaf water-level {
+      type uint8;
+      units "percent";
+      config false;
+      description "Remaining water level as a percentage.";
+    }
+
+    // ---- Action ----
+    action brew {
+      description "Immediately start a brew cycle if powered on.";
+      output {
+        leaf started {
+          type boolean;
+          mandatory true;
+          description "True if a brew cycle was started.";
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,2 @@
+aiocoap[oscore]>=0.4.7
+cbor2>=5.4.0
