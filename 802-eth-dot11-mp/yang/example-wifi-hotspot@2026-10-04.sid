@@ -1,0 +1,31 @@
+{
+  "ietf-sid-file:sid-file": {
+    "module-name": "example-wifi-hotspot",
+    "module-revision": "2026-10-04",
+    "description": "SID assignments for the example-wifi-hotspot module (keyed-list revision). In a real deployment these SIDs are allocated from a registered SID range (see RFC 9595). We use the experimental/example range 70000+ here.",
+    "assignment-range": [
+      {
+        "entry-point": "70000",
+        "size": "100"
+      }
+    ],
+    "item": [
+      { "namespace": "module",   "identifier": "example-wifi-hotspot",                                 "sid": "70000" },
+      { "namespace": "identity", "identifier": "radio-state",                                          "sid": "70001" },
+      { "namespace": "identity", "identifier": "down",                                                 "sid": "70002" },
+      { "namespace": "identity", "identifier": "scanning",                                             "sid": "70003" },
+      { "namespace": "identity", "identifier": "active",                                               "sid": "70004" },
+      { "namespace": "data",     "identifier": "/example-wifi-hotspot:hotspots",                             "sid": "70010" },
+      { "namespace": "data",     "identifier": "/example-wifi-hotspot:hotspots/hotspot",                     "sid": "70011" },
+      { "namespace": "data",     "identifier": "/example-wifi-hotspot:hotspots/hotspot/name",                "sid": "70012" },
+      { "namespace": "data",     "identifier": "/example-wifi-hotspot:hotspots/hotspot/enabled",             "sid": "70013" },
+      { "namespace": "data",     "identifier": "/example-wifi-hotspot:hotspots/hotspot/ssid",                "sid": "70014" },
+      { "namespace": "data",     "identifier": "/example-wifi-hotspot:hotspots/hotspot/band",                "sid": "70015" },
+      { "namespace": "data",     "identifier": "/example-wifi-hotspot:hotspots/hotspot/channel",             "sid": "70016" },
+      { "namespace": "data",     "identifier": "/example-wifi-hotspot:hotspots/hotspot/tx-power",            "sid": "70017" },
+      { "namespace": "data",     "identifier": "/example-wifi-hotspot:hotspots/hotspot/latency",             "sid": "70018" },
+      { "namespace": "data",     "identifier": "/example-wifi-hotspot:hotspots/hotspot/state",               "sid": "70019" },
+      { "namespace": "data",     "identifier": "/example-wifi-hotspot:hotspots/hotspot/associated-stations", "sid": "70020" }
+    ]
+  }
+}

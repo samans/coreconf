@@ -1,0 +1,141 @@
+module example-wifi-hotspot {
+  yang-version 1.1;
+  namespace "urn:example:wifi-hotspot";
+  prefix wifi;
+
+  organization
+    "CORECONF 802.11 Example";
+  contact
+    "editor@example.com";
+  description
+    "A minimal YANG model to demonstrate CORECONF (management over CoAP,
+     per draft-ietf-core-comi) for IEEE 802.11 (Wi-Fi) hotspots / access
+     points bridged onto an 802.3 (Ethernet) uplink.
+
+     The model exposes a list of wireless hotspots. Each hotspot has a
+     radio that can be enabled/disabled, with a configurable SSID, band,
+     channel, transmit power, and a configurable target round-trip
+     latency, plus read-only operational state (current state and the
+     number of associated stations).";
+
+  revision 2026-10-04 {
+    description
+      "Replace the single access-point container with a keyed list of
+       hotspots. Make latency a writable (config) target value so a
+       manager can set it.";
+    reference "draft-ietf-core-comi-21";
+  }
+  revision 2026-10-03 {
+    description "Initial revision (single access-point container).";
+    reference "draft-ietf-core-comi-21";
+  }
+
+  // ---- Operational radio states (identities) ----
+  identity radio-state {
+    description "Base identity for the current radio state.";
+  }
+  identity down {
+    base radio-state;
+    description "The radio is administratively or operationally down.";
+  }
+  identity scanning {
+    base radio-state;
+    description "The radio is up and scanning / idle (no clients).";
+  }
+  identity active {
+    base radio-state;
+    description "The radio is up and serving associated stations.";
+  }
+
+  // ---- 802.11 band enumeration ----
+  typedef wifi-band {
+    type enumeration {
+      enum band-2g4 { description "2.4 GHz band (802.11b/g/n)."; }
+      enum band-5g  { description "5 GHz band (802.11a/n/ac/ax)."; }
+      enum band-6g  { description "6 GHz band (802.11ax / Wi-Fi 6E)."; }
+    }
+    description "Operating frequency band of the access point.";
+  }
+
+  container hotspots {
+    description "Top-level container holding all configured hotspots.";
+
+    list hotspot {
+      key "name";
+      description "A single 802.11 hotspot / access point.";
+
+      leaf name {
+        type string {
+          length "1..32";
+        }
+        description "Unique name / key for this hotspot.";
+      }
+
+      // ---- Configuration (writable) ----
+      leaf enabled {
+        type boolean;
+        default false;
+        description "Enables (true) or disables (false) the radio.";
+      }
+
+      leaf ssid {
+        type string {
+          length "1..32";
+        }
+        default "hotspot";
+        description "Broadcast network name (SSID).";
+      }
+
+      leaf band {
+        type wifi-band;
+        default band-2g4;
+        description "Operating frequency band.";
+      }
+
+      leaf channel {
+        type uint8 {
+          range "1..196";
+        }
+        default 6;
+        description "Operating channel number within the selected band.";
+      }
+
+      leaf tx-power {
+        type uint8 {
+          range "1..30";
+        }
+        units "dBm";
+        default 20;
+        description "Radio transmit power in dBm.";
+      }
+
+      leaf latency {
+        type uint32 {
+          range "0..10000";
+        }
+        units "milliseconds";
+        default 0;
+        description
+          "Target / configured round-trip latency budget for this
+           hotspot, in milliseconds. A manager can set this value to
+           cap the acceptable latency; the radio reports its current
+           state against it.";
+      }
+
+      // ---- Operational state (read-only) ----
+      leaf state {
+        type identityref {
+          base radio-state;
+        }
+        config false;
+        description "Current operational state of the radio.";
+      }
+
+      leaf associated-stations {
+        type uint16;
+        config false;
+        description "Number of client stations currently associated.";
+      }
+    }
+  }
+}

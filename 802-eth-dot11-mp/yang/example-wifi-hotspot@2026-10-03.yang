@@ -1,0 +1,139 @@
+module example-wifi-hotspot {
+  yang-version 1.1;
+  namespace "urn:example:wifi-hotspot";
+  prefix wifi;
+
+  organization
+    "CORECONF 802.11 Example";
+  contact
+    "editor@example.com";
+  description
+    "A minimal YANG model to demonstrate CORECONF (management over CoAP,
+     per draft-ietf-core-comi) for an IEEE 802.11 (Wi-Fi) hotspot /
+     access point bridged onto an 802.3 (Ethernet) uplink.
+
+     The model exposes a single wireless access point whose radio can be
+     enabled/disabled, with a configurable SSID, channel, and transmit
+     power, plus read-only operational state including the number of
+     associated stations and the measured round-trip latency.";
+
+  revision 2026-10-03 {
+    description "Initial revision.";
+    reference "draft-ietf-core-comi-21";
+  }
+
+  // ---- Operational radio states (identities) ----
+  identity radio-state {
+    description "Base identity for the current radio state.";
+  }
+  identity down {
+    base radio-state;
+    description "The radio is administratively or operationally down.";
+  }
+  identity scanning {
+    base radio-state;
+    description "The radio is up and scanning / idle (no clients).";
+  }
+  identity active {
+    base radio-state;
+    description "The radio is up and serving associated stations.";
+  }
+
+  // ---- 802.11 band enumeration ----
+  typedef wifi-band {
+    type enumeration {
+      enum band-2g4 {
+        description "2.4 GHz band (802.11b/g/n).";
+      }
+      enum band-5g {
+        description "5 GHz band (802.11a/n/ac/ax).";
+      }
+      enum band-6g {
+        description "6 GHz band (802.11ax / Wi-Fi 6E).";
+      }
+    }
+    description "Operating frequency band of the access point.";
+  }
+
+  container access-point {
+    description "Top-level container for the 802.11 hotspot.";
+
+    // ---- Configuration (writable) ----
+    leaf enabled {
+      type boolean;
+      default false;
+      description
+        "Enables (true) or disables (false) the radio. This is the
+         primary configuration knob demonstrated by the CORECONF client.";
+    }
+
+    leaf ssid {
+      type string {
+        length "1..32";
+      }
+      default "hotspot";
+      description "Broadcast network name (SSID).";
+    }
+
+    leaf band {
+      type wifi-band;
+      default band-2g4;
+      description "Operating frequency band.";
+    }
+
+    leaf channel {
+      type uint8 {
+        range "1..196";
+      }
+      default 6;
+      description "Operating channel number within the selected band.";
+    }
+
+    leaf tx-power {
+      type uint8 {
+        range "1..30";
+      }
+      units "dBm";
+      default 20;
+      description "Radio transmit power in dBm.";
+    }
+
+    // ---- Operational state (read-only) ----
+    leaf state {
+      type identityref {
+        base radio-state;
+      }
+      config false;
+      description "Current operational state of the radio.";
+    }
+
+    leaf associated-stations {
+      type uint16;
+      config false;
+      description "Number of client stations currently associated.";
+    }
+
+    leaf latency {
+      type uint32;
+      units "milliseconds";
+      config false;
+      description
+        "Measured average round-trip latency to associated stations,
+         in milliseconds.";
+    }
+
+    // ---- Action ----
+    action scan {
+      description
+        "Trigger an immediate channel scan and report how many nearby
+         networks were seen.";
+      output {
+        leaf networks-found {
+          type uint16;
+          mandatory true;
+          description "Number of neighbouring networks detected.";
+        }
+      }
+    }
+  }
+}
