@@ -1,0 +1,64 @@
+module example-device {
+  yang-version 1.1;
+  namespace "urn:example:device";
+  prefix dev;
+
+  organization
+    "CORECONF / NETCONF 802 Example";
+  contact
+    "editor@example.com";
+  description
+    "YANG model for a client station ('device') managed by the Wi-Fi
+     access point over CORECONF (CoAP + CBOR + numeric SIDs).
+
+     This is the leaf of the management chain:
+
+       [mgmt station] --NETCONF--> [switch] --NETCONF--> [wifi-ap]
+                                                --CORECONF--> [device]
+
+     Because the AP talks to constrained client devices, the AP<->device
+     hop uses CORECONF rather than NETCONF, which is exactly where the
+     compact CBOR/SID encoding pays off. This module's SID file assigns
+     numeric SIDs used on that hop.";
+
+  revision 2026-10-05 {
+    description "Initial revision. Device managed over CORECONF.";
+    reference "draft-ietf-core-comi (CORECONF); RFC 9254; RFC 9595";
+  }
+
+  container device {
+    description "A single client station managed over CORECONF.";
+
+    leaf mac {
+      type string {
+        pattern "[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}";
+      }
+      description "Device MAC address.";
+    }
+
+    leaf hostname {
+      type string { length "0..64"; }
+      default "";
+      description "Device hostname, if known.";
+    }
+
+    leaf ip-address {
+      type string { length "0..45"; }
+      default "";
+      description "Assigned IP address, if any.";
+    }
+
+    leaf signal-dbm {
+      type int8 { range "-120..0"; }
+      units "dBm";
+      default -60;
+      description "Received signal strength.";
+    }
+
+    leaf connected {
+      type boolean;
+      default true;
+      description "Whether the device is currently associated.";
+    }
+  }
+}

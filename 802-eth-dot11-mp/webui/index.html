@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>802.11 CORECONF Message Flow</title>
+<title>802 Management Chain — NETCONF vs CORECONF</title>
 <style>
   :root {
     --bg: #0b0f14;
@@ -12,11 +12,14 @@
     --border: #273040;
     --text: #e6edf3;
     --muted: #8b98a9;
-    --client: #58a6ff;
-    --server: #3fb950;
+    --station: #58a6ff;
+    --switch: #a371f7;
+    --ap: #3fb950;
+    --device: #d29922;
+    --netconf: #f0883e;    /* NETCONF (XML) — the big one */
+    --coreconf: #3fb950;   /* CORECONF (CBOR/SID) — the small one */
     --req: #58a6ff;
     --resp: #3fb950;
-    --accent: #d29922;
     --danger: #f85149;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
@@ -34,7 +37,41 @@
   header .logo { font-size: 28px; }
   header h1 { font-size: 17px; margin: 0; font-weight: 600; }
   header p { margin: 0; color: var(--muted); font-size: 13px; }
-  .wrap { max-width: 1150px; margin: 0 auto; padding: 20px 24px 48px; display: grid; gap: 18px; }
+  .wrap { max-width: 1400px; margin: 0 auto; padding: 20px 24px 48px; display: grid; gap: 18px; }
+  /* top region: dashboard (left) + message pane (right), equal height */
+  .split { display: flex; align-items: flex-start; gap: 0; }
+  /* left column: the dashboard (controls + operations) */
+  .dashboard { flex: 1 1 auto; min-width: 0; display: grid; gap: 18px; align-content: start; }
+  /* right column: the message pane (default ~30%). Its height matches the
+     dashboard column (set in JS); the log scrolls inside to hold the full
+     history. */
+  .msgpane {
+    flex: 0 0 30%; min-width: 220px;
+    display: flex; flex-direction: column;
+    overflow: hidden;            /* confine contents; .msglog scrolls inside */
+    min-height: 0;
+    height: 500px;               /* fallback until JS matches it to the dashboard */
+  }
+  .msgpane .body { flex: 1 1 auto; min-height: 0; overflow: hidden; position: relative; padding: 0 !important; }
+  /* .msglog is the scroll box — absolutely sized to the body, holds full history */
+  .msgpane .msglog { position: absolute; inset: 16px; overflow-y: auto; }
+  /* draggable divider between the two columns */
+  .resizer {
+    flex: 0 0 10px; align-self: stretch; cursor: col-resize;
+    position: relative; background: transparent;
+  }
+  .resizer::before {
+    content: ""; position: absolute; top: 0; bottom: 0; left: 50%;
+    width: 2px; transform: translateX(-50%); background: var(--border);
+    border-radius: 2px; transition: background .15s;
+  }
+  .resizer:hover::before, .resizer.dragging::before { background: var(--station); width: 3px; }
+  body.resizing { cursor: col-resize; user-select: none; }
+  @media (max-width: 760px) {
+    .split { flex-direction: column; }
+    .msgpane { flex-basis: auto !important; width: 100%; height: auto !important; max-height: 60vh; }
+    .resizer { display: none; }
+  }
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
   .card h2 {
     margin: 0; padding: 11px 16px; font-size: 12px; text-transform: uppercase;
@@ -50,175 +87,159 @@
   }
   button:hover:not(:disabled) { border-color: var(--muted); }
   button:disabled { opacity: .4; cursor: not-allowed; }
-  button.primary { background: var(--server); border-color: var(--server); color: #08120b; font-weight: 600; }
+  button.primary { background: var(--ap); border-color: var(--ap); color: #08120b; font-weight: 600; }
   button.danger { border-color: var(--danger); color: var(--danger); }
   button.op { font-size: 13px; }
   .status { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
-  .dot.on { background: var(--server); box-shadow: 0 0 8px var(--server); }
+  .dot.on { background: var(--ap); box-shadow: 0 0 8px var(--ap); }
   .dot.off { background: var(--danger); }
-  code { font-family: var(--mono); color: var(--accent); }
+  code { font-family: var(--mono); color: var(--device); }
 
-  /* ---- message flow stage ---- */
+  /* ---- management chain stage ---- */
   .stage {
-    position: relative; height: 280px; margin-top: 4px;
+    position: relative; height: 230px; margin-top: 4px;
     background: radial-gradient(circle at 50% 0%, #141c28, var(--bg));
     border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
   }
   .node {
     position: absolute; top: 50%; transform: translateY(-50%);
-    width: 150px; text-align: center;
+    width: 140px; text-align: center;
   }
-  .node.client { left: 20px; }
-  .node.server { left: 38%; }
-  .node .icon {
-    font-size: 40px; display: block; margin-bottom: 6px;
-    filter: drop-shadow(0 0 10px rgba(0,0,0,.5));
-  }
-  .node .name { font-weight: 600; font-size: 14px; }
-  .node .sub { font-size: 11px; color: var(--muted); font-family: var(--mono); }
-  .node.client .name { color: var(--client); }
-  .node.server .name { color: var(--server); }
   .node .ring {
-    width: 78px; height: 78px; margin: 0 auto 8px; border-radius: 50%;
+    width: 70px; height: 70px; margin: 0 auto 8px; border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
     border: 2px solid var(--border); background: #0e141d;
   }
-  .node.client .ring { border-color: var(--client); }
-  .node.server .ring { border-color: var(--server); }
+  .node .icon { font-size: 34px; filter: drop-shadow(0 0 10px rgba(0,0,0,.5)); }
+  .node .name { font-weight: 600; font-size: 13px; }
+  .node .sub { font-size: 10px; color: var(--muted); font-family: var(--mono); }
+  .node.n-station { left: 2%; }    .node.n-station .name { color: var(--station); } .node.n-station .ring { border-color: var(--station); }
+  .node.n-switch  { left: 27%; }   .node.n-switch  .name { color: var(--switch); }  .node.n-switch  .ring { border-color: var(--switch); }
+  .node.n-ap      { left: 52%; }   .node.n-ap      .name { color: var(--ap); }      .node.n-ap      .ring { border-color: var(--ap); }
+  .node.n-device  { left: 77%; }   .node.n-device  .name { color: var(--device); }  .node.n-device  .ring { border-color: var(--device); }
   .node.pulse .ring { animation: pulse .5s ease; }
-  @keyframes pulse { 0%{transform:scale(1)} 50%{transform:scale(1.12)} 100%{transform:scale(1)} }
+  @keyframes pulse { 0%{transform:scale(1)} 50%{transform:scale(1.14)} 100%{transform:scale(1)} }
 
-  /* ---- hotspots fan ---- */
-  .fan { position: absolute; inset: 0; pointer-events: none; }
-  .fan .spoke {
-    position: absolute; height: 2px; transform-origin: left center;
-    background: linear-gradient(90deg, var(--server), transparent);
-    opacity: .5;
-  }
-  .hs {
-    position: absolute; transform: translate(-50%, -50%);
-    display: flex; flex-direction: column; align-items: center; gap: 3px;
-    width: 86px; text-align: center;
-    animation: hsIn .35s ease;
-  }
-  @keyframes hsIn { from{opacity:0; transform:translate(-50%,-50%) scale(.6)} to{opacity:1} }
-  .hs .bubble {
-    width: 40px; height: 40px; border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 20px; background: #0e141d; border: 2px solid var(--muted);
-  }
-  .hs.on .bubble { border-color: var(--server); box-shadow: 0 0 10px rgba(63,185,80,.5); }
-  .hs.off .bubble { border-color: var(--muted); opacity: .7; }
-  .hs .hname {
-    font-size: 11px; font-weight: 600; max-width: 86px;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .hs .hlat { font-size: 10px; color: var(--muted); font-family: var(--mono); }
-  .hs.flash .bubble { animation: pulse .5s ease; }
-
-  .wire {
-    position: absolute; top: 50%; left: 170px; right: 62%; height: 2px;
+  /* wire segments between adjacent nodes, labeled by protocol */
+  .seg {
+    position: absolute; top: 50%; height: 2px; transform: translateY(-50%);
     background: repeating-linear-gradient(90deg, var(--border) 0 8px, transparent 8px 16px);
-    transform: translateY(-50%);
   }
+  .seg .proto {
+    position: absolute; top: -32px; left: 50%; transform: translateX(-50%);
+    font-size: 10px; font-family: var(--mono); white-space: nowrap;
+    padding: 2px 7px; border-radius: 10px; border: 1px solid var(--border);
+    background: #0e141d;
+  }
+  .seg.netconf .proto { color: var(--netconf); border-color: var(--netconf); }
+  .seg.coreconf .proto { color: var(--coreconf); border-color: var(--coreconf); }
+
   .packet {
     position: absolute; top: 50%; transform: translateY(-50%);
-    padding: 5px 11px; border-radius: 14px; font-size: 12px; font-weight: 600;
+    padding: 4px 9px; border-radius: 12px; font-size: 11px; font-weight: 700;
     font-family: var(--mono); white-space: nowrap; box-shadow: 0 4px 14px rgba(0,0,0,.5);
     opacity: 0; z-index: 5;
   }
-  .packet.req { background: var(--req); color: #08121f; }
-  .packet.resp { background: var(--resp); color: #08120b; }
+  .packet.netconf { background: var(--netconf); color: #1a0d04; }
+  .packet.coreconf { background: var(--coreconf); color: #08120b; }
   .packet.err { background: var(--danger); color: #1a0606; }
-  .fly-right { animation: flyRight 1.1s ease forwards; }
-  .fly-left  { animation: flyLeft  1.1s ease forwards; }
-  @keyframes flyRight {
-    0%   { left: 175px; opacity: 0; }
-    12%  { opacity: 1; }
-    88%  { opacity: 1; }
-    100% { left: 36%; opacity: 0; }
-  }
-  @keyframes flyLeft {
-    0%   { left: 36%; opacity: 0; }
-    12%  { opacity: 1; }
-    88%  { opacity: 1; }
-    100% { left: 175px; opacity: 0; }
-  }
-  .legend { display: flex; gap: 18px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 14px; font-size: 12px; color: var(--muted); }
   .legend .k { display: inline-flex; align-items: center; gap: 6px; }
   .swatch { width: 12px; height: 12px; border-radius: 3px; }
 
+  /* ---- size comparison panel ---- */
+  /* fixed visible height = exactly three comparison blocks; scrolls beyond */
+  .cmp-scroll { height: 230px; overflow-y: auto; padding-right: 4px; }
+  .cmp-scroll::-webkit-scrollbar { width: 10px; }
+  .cmp-scroll::-webkit-scrollbar-track { background: transparent; }
+  .cmp-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; border: 2px solid var(--panel); }
+  .cmp-scroll::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+  .cmp-scroll { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+  .cmp { display: block; }
+  .cmp > .cmp-block { margin-bottom: 10px; }
+  .cmp > .cmp-block:last-child { margin-bottom: 0; }
+  .cmp .op-title { font-size: 13px; font-weight: 600; }
+  .bars { display: grid; gap: 6px; }
+  .bar-row { display: grid; grid-template-columns: 150px 1fr 90px; gap: 10px; align-items: center; font-size: 12px; }
+  .bar-row .lbl { font-family: var(--mono); }
+  .bar-row.netconf .lbl { color: var(--netconf); }
+  .bar-row.coreconf .lbl { color: var(--coreconf); }
+  .bar-track { background: #0e141d; border: 1px solid var(--border); border-radius: 6px; height: 20px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 5px 0 0 5px; transition: width .5s ease; }
+  .bar-row.netconf .bar-fill { background: var(--netconf); }
+  .bar-row.coreconf .bar-fill { background: var(--coreconf); }
+  .bar-row .num { text-align: right; font-family: var(--mono); color: var(--text); }
+  .ratio-badge {
+    display: inline-block; font-family: var(--mono); font-weight: 700;
+    color: var(--coreconf); border: 1px solid var(--coreconf);
+    padding: 2px 8px; border-radius: 10px; font-size: 12px;
+  }
+  .totals { display: flex; gap: 24px; flex-wrap: wrap; font-size: 13px; }
+  .totals .t { display: grid; gap: 2px; }
+  .totals .t .v { font-family: var(--mono); font-size: 18px; font-weight: 700; }
+  .totals .t.nc .v { color: var(--netconf); }
+  .totals .t.cc .v { color: var(--coreconf); }
+  .totals .t.sv .v { color: var(--station); }
+  .totals .t .l { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .toggle { font-size: 12px; color: var(--muted); margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+
   /* ---- message log ---- */
-  .msglog { display: grid; gap: 10px; }
-  .msg {
-    border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
-    animation: fadein .3s ease;
-  }
+  .msglog { display: block; overflow-y: auto; padding-right: 4px; }
+  .msglog > .msg { margin-bottom: 10px; }
+  .msglog > .msg:last-child { margin-bottom: 0; }
+  /* thin scrollbar for the message pane */
+  .msglog::-webkit-scrollbar { width: 10px; }
+  .msglog::-webkit-scrollbar-track { background: transparent; }
+  .msglog::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; border: 2px solid var(--panel); }
+  .msglog::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+  .msglog { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+  .msg { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; animation: fadein .3s ease; }
   @keyframes fadein { from{opacity:0; transform: translateY(4px)} to{opacity:1} }
-  .msg .head {
-    display: flex; align-items: center; gap: 10px; padding: 8px 12px;
-    font-family: var(--mono); font-size: 13px;
-  }
-  .msg.req .head { background: rgba(88,166,255,.12); border-left: 3px solid var(--req); }
-  .msg.resp .head { background: rgba(63,185,80,.12); border-left: 3px solid var(--resp); }
+  .msg .head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; font-family: var(--mono); font-size: 13px; }
+  .msg.netconf .head { background: rgba(240,136,62,.12); border-left: 3px solid var(--netconf); }
+  .msg.coreconf .head { background: rgba(63,185,80,.12); border-left: 3px solid var(--coreconf); }
   .msg.err .head { background: rgba(248,81,73,.12); border-left: 3px solid var(--danger); }
   .msg .tag { font-weight: 700; }
-  .msg.req .tag { color: var(--req); }
-  .msg.resp .tag { color: var(--resp); }
+  .msg.netconf .tag { color: var(--netconf); }
+  .msg.coreconf .tag { color: var(--coreconf); }
   .msg.err .tag { color: var(--danger); }
-  .msg .arrow { color: var(--muted); }
+  .msg .hop { color: var(--muted); }
   .msg .meta { color: var(--muted); margin-left: auto; font-size: 11px; }
-  .msg pre {
-    margin: 0; padding: 10px 12px; background: #060a0f; font-family: var(--mono);
-    font-size: 12px; overflow-x: auto; color: var(--text); border-top: 1px solid var(--border);
-  }
+  .msg pre { margin: 0; padding: 10px 12px; background: #060a0f; font-family: var(--mono); font-size: 12px; overflow-x: auto; color: var(--text); border-top: 1px solid var(--border); }
   .empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
-  .term {
-    background: #060a0f; border: 1px solid var(--border); border-radius: 8px;
-    padding: 10px 12px; font-family: var(--mono); font-size: 12px;
-    height: 130px; overflow-y: auto; white-space: pre-wrap; color: var(--muted);
-  }
+  .term { background: #060a0f; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-family: var(--mono); font-size: 12px; height: 120px; overflow-y: auto; white-space: pre-wrap; color: var(--muted); }
   .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
 
   /* ---- forms ---- */
-  .formbox {
-    border: 1px solid var(--border); border-radius: 8px;
-    padding: 12px 14px; margin-top: 12px; background: var(--panel-2);
-  }
+  .formbox { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-top: 12px; background: var(--panel-2); }
   .formtitle { font-size: 13px; font-weight: 600; margin-bottom: 10px; }
-  .fields {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 10px; margin-bottom: 10px;
-  }
-  .fields label {
-    display: flex; flex-direction: column; gap: 4px;
-    font-size: 11px; color: var(--muted); text-transform: uppercase;
-    letter-spacing: .04em;
-  }
-  .fields input, .fields select {
-    font: inherit; font-size: 13px; color: var(--text);
-    background: #060a0f; border: 1px solid var(--border);
-    border-radius: 6px; padding: 7px 9px; outline: none;
-  }
-  .fields input:focus, .fields select:focus { border-color: var(--client); }
+  .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 10px; }
+  .fields label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .fields input, .fields select { font: inherit; font-size: 13px; color: var(--text); background: #060a0f; border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; outline: none; }
+  .fields input:focus, .fields select:focus { border-color: var(--station); }
   button.small { font-size: 13px; padding: 7px 13px; }
 </style>
 </head>
 <body>
 <header>
-  <div class="logo">&#128246;</div>
+  <div class="logo">&#128225;</div>
   <div>
-    <h1>802.11 Hotspot &mdash; CORECONF Message Flow</h1>
-    <p>YANG over CoAP + CBOR &middot; watch each request/response travel between client and server</p>
+    <h1>802 Management Chain &mdash; NETCONF vs CORECONF</h1>
+    <p>station &rarr;<b style="color:var(--netconf)"> NETCONF </b>&rarr; switch &rarr;<b style="color:var(--netconf)"> NETCONF </b>&rarr; AP &rarr;<b style="color:var(--coreconf)"> CORECONF </b>&rarr; device &middot; watch each message cascade and compare encoding sizes</p>
   </div>
 </header>
 
 <div class="wrap">
 
+  <div class="split" id="split">
+
+  <div class="dashboard" id="dashboard">
+
   <!-- Server control -->
   <div class="card">
-    <h2>CoAP Datastore Server</h2>
+    <h2>Access-Point CORECONF Datastore</h2>
     <div class="body">
       <div class="row">
         <button id="startBtn" class="primary">&#9654; Start simulator</button>
@@ -227,96 +248,102 @@
         <span style="flex:1"></span>
         <span class="status" id="pyinfo"></span>
       </div>
-      <div class="hint">Starts <code>server.py</code> (NoSec CoAP on udp/5683).</div>
+      <div class="hint">Starts <code>server.py</code> — the AP's CoAP/CORECONF datastore (NoSec, udp/5683). The upstream NETCONF hops are modeled and their equivalent XML measured for size comparison.</div>
       <div class="term" id="serverLog" style="margin-top:12px;"></div>
     </div>
   </div>
 
-  <!-- Message flow -->
+  <!-- Operations -->
   <div class="card">
-    <h2>Hotspots &amp; Operations</h2>
+    <h2>Manager Operations (cascade down the chain)</h2>
     <div class="body">
-      <!-- Read operations -->
       <div class="row">
-        <button class="op" data-op="get" title="Read all hotspots">get (read all)</button>
-        <button class="op" data-op="fetch" title="FETCH the hotspots list">fetch</button>
+        <button class="op" data-op="get" title="Read AP state">get (read AP state)</button>
+        <button class="op" data-op="enable">enable radio</button>
+        <button class="op" data-op="disable">disable radio</button>
       </div>
 
-      <!-- Add a hotspot -->
       <div class="formbox">
-        <div class="formtitle">&#10133; Add a hotspot</div>
+        <div class="formtitle">&#128246; Configure the access point</div>
         <div class="fields">
-          <label>Name
-            <input id="addName" placeholder="e.g. lobby" value="lobby" />
-          </label>
-          <label>SSID
-            <input id="addSsid" placeholder="e.g. lobby-guest" value="lobby-guest" />
-          </label>
-          <label>Band
-            <select id="addBand">
-              <option value="band-2g4">2.4 GHz</option>
-              <option value="band-5g" selected>5 GHz</option>
-              <option value="band-6g">6 GHz</option>
-            </select>
-          </label>
           <label>Channel
-            <input id="addChannel" type="number" min="1" max="196" value="36" />
-          </label>
-          <label>Tx power (dBm)
-            <input id="addPower" type="number" min="1" max="30" value="23" />
-          </label>
-          <label>Latency (ms)
-            <input id="addLatency" type="number" min="0" max="10000" placeholder="optional" />
-          </label>
-        </div>
-        <button class="op primary small" id="addBtn">Add hotspot</button>
-      </div>
-
-      <!-- Set latency / enable / disable on an existing hotspot -->
-      <div class="formbox">
-        <div class="formtitle">&#9201;&#65039; Set latency &amp; radio</div>
-        <div class="fields">
-          <label>Hotspot name
-            <input id="setName" placeholder="e.g. lobby" value="lobby" />
+            <input id="setChannel" type="number" min="1" max="196" value="44" />
           </label>
           <label>Latency (ms)
             <input id="setLatency" type="number" min="0" max="10000" value="35" />
           </label>
+          <label>Tx power (dBm)
+            <input id="setPower" type="number" min="1" max="30" value="23" />
+          </label>
+          <label>SSID
+            <input id="setSsid" placeholder="e.g. corp-wifi" value="corp-wifi" />
+          </label>
         </div>
         <div class="row">
-          <button class="op primary small" id="setLatencyBtn">Set latency</button>
-          <button class="op small" id="enableBtn">Enable radio</button>
-          <button class="op small" id="disableBtn">Disable radio</button>
+          <button class="op primary small" id="setChannelBtn">Set channel</button>
+          <button class="op small" id="setLatencyBtn">Set latency</button>
+          <button class="op small" id="setPowerBtn">Set tx-power</button>
+          <button class="op small" id="setSsidBtn">Set SSID</button>
         </div>
       </div>
 
-      <div class="hint">Each action sends a CORECONF message; watch it travel the wire below and read the decoded CBOR in the log.</div>
+      <div class="formbox">
+        <div class="formtitle">&#128241; Associate / disconnect a device (CORECONF, AP&harr;device)</div>
+        <div class="fields">
+          <label>MAC
+            <input id="devMac" placeholder="aa:bb:cc:00:11:22" value="aa:bb:cc:00:11:22" />
+          </label>
+          <label>Hostname
+            <input id="devHost" placeholder="laptop-1" value="laptop-1" />
+          </label>
+          <label>IP address
+            <input id="devIp" placeholder="192.0.2.50" value="192.0.2.50" />
+          </label>
+        </div>
+        <div class="row">
+          <button class="op primary small" id="connectBtn">Connect device</button>
+          <button class="op small" id="disconnectBtn">Disconnect device</button>
+        </div>
+      </div>
+
+      <div class="hint">Each manager action travels station&rarr;switch&rarr;AP as <b style="color:var(--netconf)">NETCONF/XML</b>, then AP&rarr;device as <b style="color:var(--coreconf)">CORECONF/CBOR+SID</b>. Watch the packet size shrink on the last hop.</div>
 
       <div class="stage" id="stage">
-        <div class="node client" id="clientNode">
+        <div class="node n-station" id="node-station">
           <div class="ring"><span class="icon">&#128187;</span></div>
-          <div class="name">Client</div>
-          <div class="sub">CoAP / CBOR</div>
+          <div class="name">Mgmt&nbsp;Station</div>
+          <div class="sub">NETCONF mgr</div>
         </div>
-        <div class="wire"></div>
-        <div class="node server" id="serverNode">
+        <div class="node n-switch" id="node-switch">
+          <div class="ring"><span class="icon"><svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="var(--switch)" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" style="filter:drop-shadow(0 0 10px rgba(0,0,0,.5))" aria-label="RJ-45 plug" role="img"><!-- RJ-45 modular connector --><path d="M7 2h10v9l-2 2H9l-2-2z"/><!-- 8 contact pins --><path d="M9 2v4M11 2v4M13 2v4M15 2v4"/><!-- cable --><path d="M12 13v4"/><path d="M9 17h6v5H9z"/></svg></span></div>
+          <div class="name">Switch</div>
+          <div class="sub">802.3</div>
+        </div>
+        <div class="node n-ap" id="node-ap">
           <div class="ring"><span class="icon">&#128225;</span></div>
-          <div class="name">Access Point</div>
+          <div class="name">Wi-Fi AP</div>
           <div class="sub">coap://[::]:5683/c</div>
         </div>
-        <!-- hotspots fan out from the access point -->
-        <div class="fan" id="hotspotFan"></div>
+        <div class="node n-device" id="node-device">
+          <div class="ring"><span class="icon">&#128241;</span></div>
+          <div class="name">Device</div>
+          <div class="sub">CORECONF</div>
+        </div>
       </div>
       <div class="legend">
-        <span class="k"><span class="swatch" style="background:var(--req)"></span>Request (client → server)</span>
-        <span class="k"><span class="swatch" style="background:var(--resp)"></span>Response (server → client)</span>
+        <span class="k"><span class="swatch" style="background:var(--netconf)"></span>NETCONF (XML)</span>
+        <span class="k"><span class="swatch" style="background:var(--coreconf)"></span>CORECONF (CBOR/SID)</span>
       </div>
     </div>
   </div>
 
-  <!-- Decoded message log -->
-  <div class="card">
-    <h2>Decoded Messages <button id="clearBtn" class="op" style="margin-left:auto;padding:4px 10px;font-size:12px;">Clear</button></h2>
+  </div><!-- /.dashboard -->
+
+  <div class="resizer" id="resizer" role="separator" aria-orientation="vertical" title="Drag to resize"></div>
+
+  <!-- Message log -->
+  <div class="card msgpane" id="msgpane">
+    <h2>Messages <button id="clearBtn" class="op" style="margin-left:auto;padding:4px 10px;font-size:12px;">Clear</button></h2>
     <div class="body">
       <div class="msglog" id="msglog">
         <div class="empty">No messages yet. Start the simulator and run an operation.</div>
@@ -324,12 +351,111 @@
     </div>
   </div>
 
+  </div><!-- /.split -->
+
+  <!-- Size comparison (full width) -->
+  <div class="card">
+    <h2>Encoding Size Comparison
+      <label class="toggle"><input type="checkbox" id="wireToggle" /> include transport framing (wire bytes)</label>
+    </h2>
+    <div class="body">
+      <div class="cmp-scroll">
+        <div class="cmp" id="cmp">
+          <div class="empty">Run an operation to compare NETCONF vs CORECONF encoding sizes.</div>
+        </div>
+      </div>
+      <div class="totals" style="margin-top:16px;">
+        <div class="t nc"><span class="v" id="totNc">0 B</span><span class="l">NETCONF total</span></div>
+        <div class="t cc"><span class="v" id="totCc">0 B</span><span class="l">CORECONF total</span></div>
+        <div class="t sv"><span class="v" id="totSave">0 B</span><span class="l">Bytes saved</span></div>
+        <div class="t sv"><span class="v" id="totRatio">—</span><span class="l">Overall ratio</span></div>
+      </div>
+      <div class="hint">Payload sizes are the real serialized data units (XML text vs CBOR/SID). "Wire bytes" add a representative transport-framing estimate (NETCONF over SSH/TCP ≈ 88 B; CoAP header ≈ 8 B) — labeled as an estimate.</div>
+    </div>
+  </div>
+
 </div>
 
 <script>
 const $ = (id) => document.getElementById(id);
+
+// ---- resizable split between dashboard and message pane -------------------
+(function initResizer() {
+  const split = document.getElementById("split");
+  const resizer = $("resizer");
+  const pane = $("msgpane");
+  if (!split || !resizer || !pane) return;
+  let dragging = false;
+
+  function paneWidthFromClientX(clientX) {
+    const rect = split.getBoundingClientRect();
+    // message pane sits on the right; its width grows as the pointer moves left
+    let w = rect.right - clientX;
+    const min = 220;
+    const max = rect.width - 320; // keep the dashboard usable
+    return Math.max(min, Math.min(max, w));
+  }
+  function onMove(e) {
+    if (!dragging) return;
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    pane.style.flexBasis = paneWidthFromClientX(clientX) + "px";
+    if (e.cancelable) e.preventDefault();
+  }
+  function stop() {
+    if (!dragging) return;
+    dragging = false;
+    resizer.classList.remove("dragging");
+    document.body.classList.remove("resizing");
+  }
+  function start(e) {
+    dragging = true;
+    resizer.classList.add("dragging");
+    document.body.classList.add("resizing");
+    if (e.cancelable) e.preventDefault();
+  }
+  resizer.addEventListener("mousedown", start);
+  resizer.addEventListener("touchstart", start, { passive: false });
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("touchmove", onMove, { passive: false });
+  window.addEventListener("mouseup", stop);
+  window.addEventListener("touchend", stop);
+  // keyboard support on the divider
+  resizer.tabIndex = 0;
+  resizer.addEventListener("keydown", (e) => {
+    const cur = pane.getBoundingClientRect().width;
+    const rect = split.getBoundingClientRect();
+    const clamp = (w) => Math.max(220, Math.min(rect.width - 320, w));
+    if (e.key === "ArrowLeft")  { pane.style.flexBasis = clamp(cur + 24) + "px"; e.preventDefault(); }
+    if (e.key === "ArrowRight") { pane.style.flexBasis = clamp(cur - 24) + "px"; e.preventDefault(); }
+  });
+})();
+
+// ---- match the message pane height to the dashboard column ---------------
+(function syncPaneHeight() {
+  const dashboard = $("dashboard");
+  const pane = $("msgpane");
+  if (!dashboard || !pane) return;
+  function apply() {
+    if (window.matchMedia("(max-width: 760px)").matches) { pane.style.height = ""; return; }
+    pane.style.height = dashboard.offsetHeight + "px";
+  }
+  // observe the DASHBOARD only — never the pane/messages, so adding messages
+  // does not change the pane height (that was the old flashing-scrollbar bug)
+  if (window.ResizeObserver) new ResizeObserver(apply).observe(dashboard);
+  window.addEventListener("resize", apply);
+  apply();
+  requestAnimationFrame(apply);
+  setTimeout(apply, 300);
+})();
+
 let serverLogSince = 0;
 let busy = false;
+let useWire = false;
+
+// cumulative totals
+let totNetconf = 0, totCoreconf = 0;
+
+const NODE_ORDER = ["station", "switch", "ap", "device"];
 
 // ---- server control ------------------------------------------------------
 async function refreshStatus() {
@@ -337,8 +463,6 @@ async function refreshStatus() {
     const s = await (await fetch("/api/server/status")).json();
     setServerUi(s.server);
     $("pyinfo").textContent = s.python ? ("python: " + s.python.split("/").slice(-3).join("/")) : "";
-    // if the simulator is already up when the page loads, draw the fan
-    if (s.server && currentHotspots.length === 0) refreshHotspots();
   } catch (e) {}
 }
 function setServerUi(running) {
@@ -352,14 +476,11 @@ $("startBtn").onclick = async () => {
   const s = await (await fetch("/api/server/start", {method:"POST"})).json();
   setServerUi(s.running);
   logServer("[webui] " + s.msg);
-  // give the CoAP server a moment to bind, then draw the seeded hotspot(s)
-  if (s.running) setTimeout(() => refreshHotspots(), 1500);
 };
 $("stopBtn").onclick = async () => {
   const s = await (await fetch("/api/server/stop", {method:"POST"})).json();
   setServerUi(s.running);
   logServer("[webui] " + s.msg);
-  renderHotspots([]);   // clear the fan when the simulator stops
 };
 function logServer(line) {
   const el = $("serverLog");
@@ -375,213 +496,186 @@ async function pollLogs() {
   } catch (e) {}
 }
 
-// ---- operations ----------------------------------------------------------
+// ---- operation wiring ----------------------------------------------------
 function wireOps() {
-  // read-only buttons that carry a data-op attribute
   document.querySelectorAll("button[data-op]").forEach(b => {
     b.onclick = () => runOp(b.dataset.op, {});
   });
-
-  // Add hotspot
-  $("addBtn").onclick = () => {
-    const name = $("addName").value.trim();
-    if (!name) { alert("Enter a hotspot name"); return; }
-    const params = {name,
-      ssid: $("addSsid").value.trim(),
-      band: $("addBand").value,
-      channel: $("addChannel").value,
-      tx_power: $("addPower").value,
-    };
-    const lat = $("addLatency").value;
-    if (lat !== "") params.latency = lat;
-    // mirror the new name into the "set" form for convenience
-    $("setName").value = name;
-    runOp("add", params);
+  $("setChannelBtn").onclick = () => runOp("set-channel", {channel: $("setChannel").value});
+  $("setLatencyBtn").onclick = () => runOp("set-latency", {latency: $("setLatency").value});
+  $("setPowerBtn").onclick  = () => runOp("set-power",   {tx_power: $("setPower").value});
+  $("setSsidBtn").onclick   = () => runOp("set-ssid",    {ssid: $("setSsid").value});
+  $("connectBtn").onclick   = () => {
+    const mac = $("devMac").value.trim();
+    if (!mac) { alert("Enter a MAC address"); return; }
+    runOp("connect", {mac, hostname: $("devHost").value.trim(), ip: $("devIp").value.trim()});
   };
-
-  // Set latency / enable / disable
-  $("setLatencyBtn").onclick = () => {
-    const name = $("setName").value.trim();
-    const latency = $("setLatency").value;
-    if (!name) { alert("Enter a hotspot name"); return; }
-    if (latency === "") { alert("Enter a latency value"); return; }
-    runOp("set-latency", {name, latency});
-  };
-  $("enableBtn").onclick = () => {
-    const name = $("setName").value.trim();
-    if (!name) { alert("Enter a hotspot name"); return; }
-    runOp("enable", {name});
-  };
-  $("disableBtn").onclick = () => {
-    const name = $("setName").value.trim();
-    if (!name) { alert("Enter a hotspot name"); return; }
-    runOp("disable", {name});
+  $("disconnectBtn").onclick = () => {
+    const mac = $("devMac").value.trim();
+    if (!mac) { alert("Enter a MAC address"); return; }
+    runOp("disconnect", {mac});
   };
 }
 
-function methodLabel(method) {
-  // aiocoap renders codes like "GET", "FETCH", "iPATCH", "POST"
-  return method;
-}
-
-// animate a packet across the wire
-function flyPacket(dir, text, cls) {
+// ---- stage geometry ------------------------------------------------------
+// Build the three wire segments between adjacent nodes, labeled by protocol.
+function layoutSegments() {
   const stage = $("stage");
-  const p = document.createElement("div");
-  p.className = "packet " + cls + " " + (dir === "right" ? "fly-right" : "fly-left");
-  p.textContent = text;
-  stage.appendChild(p);
-  const srcNode = dir === "right" ? "clientNode" : "serverNode";
-  const dstNode = dir === "right" ? "serverNode" : "clientNode";
-  $(srcNode).classList.add("pulse");
-  setTimeout(() => $(srcNode).classList.remove("pulse"), 500);
-  setTimeout(() => {
-    $(dstNode).classList.add("pulse");
-    setTimeout(() => $(dstNode).classList.remove("pulse"), 500);
-  }, 950);
-  setTimeout(() => p.remove(), 1200);
-  return 1100; // animation duration (ms)
+  // remove old
+  stage.querySelectorAll(".seg").forEach(e => e.remove());
+  const protos = ["NETCONF", "NETCONF", "CORECONF"];
+  const stRect = stage.getBoundingClientRect();
+  for (let i = 0; i < 3; i++) {
+    const a = $("node-" + NODE_ORDER[i]).getBoundingClientRect();
+    const b = $("node-" + NODE_ORDER[i+1]).getBoundingClientRect();
+    const x1 = a.left - stRect.left + a.width/2 + 36;
+    const x2 = b.left - stRect.left + b.width/2 - 36;
+    const seg = document.createElement("div");
+    seg.className = "seg " + protos[i].toLowerCase();
+    seg.style.left = x1 + "px";
+    seg.style.width = (x2 - x1) + "px";
+    seg.innerHTML = `<span class="proto">${protos[i]}</span>`;
+    seg.id = "seg-" + i;
+    stage.appendChild(seg);
+  }
 }
 
-function clearEmpty() {
+function nodeCenterX(name) {
+  const stage = $("stage").getBoundingClientRect();
+  const n = $("node-" + name).getBoundingClientRect();
+  return n.left - stage.left + n.width/2;
+}
+
+// animate one packet across a single hop (from -> to)
+function flyHop(from, to, label, proto, sizeText) {
+  return new Promise(resolve => {
+    const stage = $("stage");
+    const x1 = nodeCenterX(from);
+    const x2 = nodeCenterX(to);
+    const p = document.createElement("div");
+    p.className = "packet " + proto.toLowerCase();
+    p.textContent = label + (sizeText ? "  " + sizeText : "");
+    p.style.left = x1 + "px";
+    p.style.opacity = "0";
+    stage.appendChild(p);
+    $("node-" + from).classList.add("pulse");
+    setTimeout(() => $("node-" + from).classList.remove("pulse"), 500);
+    // trigger transition
+    requestAnimationFrame(() => {
+      p.style.transition = "left .8s ease, opacity .3s ease";
+      p.style.opacity = "1";
+      p.style.left = x2 + "px";
+    });
+    setTimeout(() => {
+      $("node-" + to).classList.add("pulse");
+      setTimeout(() => $("node-" + to).classList.remove("pulse"), 500);
+      p.style.opacity = "0";
+      setTimeout(() => p.remove(), 300);
+      resolve();
+    }, 820);
+  });
+}
+
+// ---- message log ---------------------------------------------------------
+function clearEmpty(sel) {
+  const el = sel.querySelector(".empty");
+  if (el) el.remove();
+}
+function addMessage(proto, title, hop, meta, payloadObj) {
   const log = $("msglog");
-  const empty = log.querySelector(".empty");
-  if (empty) empty.remove();
-}
-
-function addMessage(kind, title, meta, payloadObj) {
-  clearEmpty();
+  clearEmpty(log);
+  const kind = proto === "CORECONF" ? "coreconf" : (proto === "NETCONF" ? "netconf" : "err");
   const div = document.createElement("div");
   div.className = "msg " + kind;
-  const arrow = kind === "req" ? "→" : (kind === "resp" ? "←" : "✕");
   const head = document.createElement("div");
   head.className = "head";
   head.innerHTML = `<span class="tag">${title}</span>` +
-                   `<span class="arrow">${arrow}</span>` +
+                   `<span class="hop">${hop}</span>` +
                    `<span class="meta">${meta || ""}</span>`;
   div.appendChild(head);
   if (payloadObj !== undefined && payloadObj !== null) {
     const pre = document.createElement("pre");
-    pre.textContent = typeof payloadObj === "string"
-      ? payloadObj : JSON.stringify(payloadObj, null, 2);
+    pre.textContent = typeof payloadObj === "string" ? payloadObj : JSON.stringify(payloadObj, null, 2);
     div.appendChild(pre);
   }
-  $("msglog").appendChild(div);
-  div.scrollIntoView({behavior: "smooth", block: "nearest"});
+  log.appendChild(div);
+  // keep newest message visible by scrolling the log container itself
+  log.scrollTop = log.scrollHeight;
 }
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+// ---- size comparison panel ----------------------------------------------
+function sizeField(info) { return useWire ? info.wire : info.payload; }
 
-// ---- hotspot fan diagram -------------------------------------------------
-let currentHotspots = [];
+function renderComparison(label, sizes) {
+  const cmp = $("cmp");
+  clearEmpty(cmp);
+  const nc = sizeField(sizes.netconf);
+  const cc = sizeField(sizes.coreconf);
+  const ratio = useWire ? sizes.ratio_wire : sizes.ratio_payload;
+  const max = Math.max(nc, cc, 1);
+  const block = document.createElement("div");
+  block.className = "cmp-block";
+  block.innerHTML =
+    `<div class="op-title">${label} <span class="ratio-badge">${ratio}× smaller</span></div>` +
+    `<div class="bars">` +
+      `<div class="bar-row netconf"><span class="lbl">NETCONF (XML)</span>` +
+        `<div class="bar-track"><div class="bar-fill" style="width:${(nc/max*100).toFixed(1)}%"></div></div>` +
+        `<span class="num">${nc} B</span></div>` +
+      `<div class="bar-row coreconf"><span class="lbl">CORECONF</span>` +
+        `<div class="bar-track"><div class="bar-fill" style="width:${(cc/max*100).toFixed(1)}%"></div></div>` +
+        `<span class="num">${cc} B</span></div>` +
+    `</div>`;
+  // keep the full comparison history (scrollable); newest on top
+  cmp.prepend(block);
 
-function renderHotspots(list, flashName) {
-  currentHotspots = Array.isArray(list) ? list : [];
-  const fan = $("hotspotFan");
-  const stage = $("stage");
-  fan.innerHTML = "";
-
-  const n = currentHotspots.length;
-  if (!n) return;
-
-  // Anchor the fan at the Access Point (server) ring.
-  const sRect = $("serverNode").getBoundingClientRect();
-  const stRect = stage.getBoundingClientRect();
-  const originX = sRect.left - stRect.left + sRect.width / 2;
-  const originY = sRect.top - stRect.top + 34;   // ring centre-ish
-
-  // Fan the hotspots out to the right of the access point.
-  const radius = 120;
-  const spread = Math.min(140, 34 * (n - 1)); // total angular spread (deg)
-  const start = -spread / 2;
-  const step = n > 1 ? spread / (n - 1) : 0;
-
-  const maxX = stRect.width - 50;   // keep nodes inside the stage
-  const maxY = stRect.height - 42;
-  const minY = 42;
-
-  currentHotspots.forEach((hs, i) => {
-    const ang = (start + step * i) * Math.PI / 180; // around horizontal axis
-    // point to the right and up/down
-    const dx = Math.cos(ang) * radius;
-    const dy = Math.sin(ang) * radius;
-    const x = Math.min(maxX, originX + dx);
-    const y = Math.max(minY, Math.min(maxY, originY + dy));
-
-    // spoke line from origin to the (possibly clamped) node position
-    const rdx = x - originX, rdy = y - originY;
-    const spoke = document.createElement("div");
-    spoke.className = "spoke";
-    const len = Math.hypot(rdx, rdy);
-    const deg = Math.atan2(rdy, rdx) * 180 / Math.PI;
-    spoke.style.left = originX + "px";
-    spoke.style.top = originY + "px";
-    spoke.style.width = len + "px";
-    spoke.style.transform = `rotate(${deg}deg)`;
-    fan.appendChild(spoke);
-
-    // hotspot node
-    const node = document.createElement("div");
-    const on = !!hs.enabled;
-    node.className = "hs " + (on ? "on" : "off") +
-                    (flashName && hs.name === flashName ? " flash" : "");
-    node.style.left = x + "px";
-    node.style.top = y + "px";
-    const lat = (hs.latency_ms !== undefined && hs.latency_ms !== null)
-      ? hs.latency_ms + " ms" : "";
-    node.innerHTML =
-      `<div class="bubble">${on ? "📶" : "📵"}</div>` +
-      `<div class="hname" title="${hs.name}">${hs.name}</div>` +
-      `<div class="hlat">${lat}</div>`;
-    fan.appendChild(node);
-  });
+  // update cumulative totals
+  totNetconf += nc;
+  totCoreconf += cc;
+  $("totNc").textContent = totNetconf + " B";
+  $("totCc").textContent = totCoreconf + " B";
+  $("totSave").textContent = (totNetconf - totCoreconf) + " B";
+  $("totRatio").textContent = totCoreconf ? (totNetconf/totCoreconf).toFixed(1) + "×" : "—";
 }
 
-// Silently fetch current hotspots (no wire animation) and redraw the fan.
-async function refreshHotspots(flashName) {
-  try {
-    const resp = await fetch("/api/op", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({op: "get"}),
-    });
-    const text = await resp.text();
-    for (const line of text.split("\n")) {
-      if (!line.trim()) continue;
-      const ev = JSON.parse(line);
-      if (ev.dir === "resp" && Array.isArray(ev.decoded)) {
-        renderHotspots(ev.decoded, flashName);
-      }
-    }
-  } catch (e) { /* ignore */ }
-}
-
+// ---- event handling ------------------------------------------------------
 async function handleEvent(ev) {
-  if (ev.dir === "req") {
-    const meta = `cf=${ev.cf ?? "—"} · ${ev.bytes ?? 0} B`;
-    const dur = flyPacket("right", methodLabel(ev.method), "req");
-    addMessage("req", `${methodLabel(ev.method)} /c`, meta, ev.payload);
-    if (ev.label) addMessage("req", "↳ " + ev.label, "", null);
-    await sleep(dur);
-  } else if (ev.dir === "resp") {
-    const meta = `${ev.code} · cf=${ev.cf ?? "—"} · ${ev.bytes ?? 0} B`;
-    const ok = (ev.code || "").startsWith("2.");
-    const dur = flyPacket("left", ev.code || "resp", ok ? "resp" : "err");
-    addMessage(ok ? "resp" : "err", ev.code || "response", meta, ev.payload);
-    if (ev.decoded) addMessage(ok ? "resp" : "err", "↳ decoded", "", ev.decoded);
-    // get/fetch responses carry the full hotspot list -> redraw the fan
-    if (ok && Array.isArray(ev.decoded)) renderHotspots(ev.decoded);
-    await sleep(dur);
+  if (ev.dir === "req" || ev.dir === "resp") {
+    const proto = ev.protocol || "NETCONF";
+    let sizeText = "";
+    if (ev.sizes) {
+      const field = proto === "CORECONF" ? ev.sizes.coreconf : ev.sizes.netconf;
+      sizeText = sizeField(field) + " B";
+    }
+    const arrow = ev.dir === "req" ? "→" : "←";
+    await flyHop(ev.from, ev.to, ev.method, proto, sizeText);
+
+    const hop = `${ev.from} ${arrow} ${ev.to}`;
+    let meta = proto;
+    if (ev.sizes) {
+      const field = proto === "CORECONF" ? ev.sizes.coreconf : ev.sizes.netconf;
+      meta += " · " + sizeField(field) + " B";
+    }
+    const title = (ev.label ? ev.label + " — " : "") + ev.method;
+    addMessage(proto, title, hop, meta, ev.payload);
+
+    // render the size comparison on each CORECONF hop that carries sizes —
+    // the request direction (small) and, for reads, the response direction
+    // (the data-bearing body: full wifi-ap container + device list).
+    if (proto === "CORECONF" && ev.sizes) {
+      const cmpLabel = ev.size_label || ev.label || "operation";
+      renderComparison(cmpLabel, ev.sizes);
+    }
   } else if (ev.dir === "error") {
-    addMessage("err", "error", "", ev.label);
+    addMessage("err", "error", "", "", ev.label);
   } else if (ev.dir === "log") {
-    addMessage("req", "log", "", ev.label);
+    addMessage("NETCONF", "log", "", "", ev.label);
   }
 }
 
 async function runOp(op, params) {
   if (busy) return;
   busy = true;
+  layoutSegments();
   const opButtons = document.querySelectorAll(".op");
   opButtons.forEach(b => b.disabled = true);
   try {
@@ -604,27 +698,19 @@ async function runOp(op, params) {
         if (chunk.trim()) queue.push(JSON.parse(chunk));
       }
     }
-    // play events sequentially so the animation is readable
-    let ok = false;
     for (const ev of queue) {
       if (ev.dir === "end") continue;
-      if (ev.dir === "resp" && (ev.code || "").startsWith("2.")) ok = true;
       await handleEvent(ev);
     }
-    // After a successful mutation, refresh the fan from the server so the
-    // new/updated hotspot shows up, flashing the one we just touched.
-    const mutations = ["add", "enable", "disable", "set-latency"];
-    if (ok && mutations.includes(op)) {
-      await refreshHotspots(params && params.name);
-    }
   } catch (e) {
-    addMessage("err", "request failed", "", String(e));
+    addMessage("err", "request failed", "", "", String(e));
   } finally {
     busy = false;
     opButtons.forEach(b => b.disabled = false);
   }
 }
 
+$("wireToggle").onchange = (e) => { useWire = e.target.checked; };
 $("clearBtn").onclick = () => {
   $("msglog").innerHTML = '<div class="empty">No messages yet. Start the simulator and run an operation.</div>';
 };
@@ -632,6 +718,8 @@ $("clearBtn").onclick = () => {
 // ---- boot ----------------------------------------------------------------
 wireOps();
 refreshStatus();
+setTimeout(layoutSegments, 100);
+window.addEventListener("resize", () => { if (!busy) layoutSegments(); });
 setInterval(pollLogs, 1000);
 </script>
 </body>

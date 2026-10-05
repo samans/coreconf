@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """
-CORECONF client for the 802.11 Wi-Fi hotspot example (keyed-list revision).
+CLI client for the 802 three-node management chain.
 
-Demonstrates the CORECONF workflow against the server:
+    [mgmt station] --NETCONF--> [switch] --NETCONF--> [wifi-ap]
+                                                --CORECONF--> [device]
 
-  1. GET the full datastore (all hotspots).
-  2. ADD a new hotspot via iPATCH (a new keyed list entry).
-  3. SET that hotspot's target latency via iPATCH.
-  4. ENABLE its radio.
-  5. GET again to confirm the new state.
+Demonstrates the workflow against the AP's CORECONF datastore (server.py):
 
-All payloads are CBOR keyed by numeric YANG SIDs (RFC 9254 / RFC 9595).
-A YANG list is encoded as a CBOR array of maps keyed by 'name'.
+  1. GET the AP datastore (wifi-ap container + device list).
+  2. SET an AP leaf (e.g. channel) — a manager action that cascades
+     NETCONF -> NETCONF -> CORECONF down the chain.
+  3. CONNECT a device via iPATCH (adds a device entry over CORECONF).
+  4. GET again to confirm.
+
+For each cascaded action it prints the encoded size of the equivalent
+NETCONF (XML) message and the CORECONF (CBOR/SID) message, so you can see
+how much smaller CORECONF is for the same operation.
 
 Run (after starting server.py):
     python3 client.py
@@ -24,49 +28,60 @@ import cbor2
 from aiocoap import Message, Code, Context
 
 from wifi_sids import (
-    SID_HOTSPOTS, SID_HOTSPOT, SID_NAME,
-    SID_ENABLED, SID_SSID, SID_BAND, SID_CHANNEL, SID_TX_POWER, SID_LATENCY,
-    SID_STATE, SID_ASSOCIATED_STATIONS,
-    BAND_TO_INT, INT_TO_BAND, STATE_NAMES,
+    SID_WIFI_AP, SID_AP_NAME, SID_ENABLED, SID_SSID, SID_BAND, SID_CHANNEL,
+    SID_TX_POWER, SID_LATENCY, SID_STATE,
+    SID_DEVICE, SID_MAC, SID_HOSTNAME, SID_IP_ADDRESS, SID_SIGNAL_DBM,
+    SID_CONNECTED,
+    INT_TO_BAND, STATE_NAMES,
     CF_YANG_INSTANCES_SEQ, DATASTORE_PATH,
+    coreconf_ap_leaf, coreconf_device_entry,
+    netconf_ap_leaf, netconf_device_entry, sizes,
 )
 
 logging.basicConfig(level=logging.INFO)
-LOG = logging.getLogger("coreconf-wifi-client")
+LOG = logging.getLogger("coreconf-ap-client")
 
 SERVER = f"coap://localhost/{DATASTORE_PATH}"
 
 
-def _pretty(m):
+def _pretty_ap(ap):
+    devs = ap.get(SID_DEVICE, []) or []
     return {
-        "name": m.get(SID_NAME),
-        "enabled": m.get(SID_ENABLED),
-        "ssid": m.get(SID_SSID),
-        "band": INT_TO_BAND.get(m.get(SID_BAND)),
-        "channel": m.get(SID_CHANNEL),
-        "tx_power": m.get(SID_TX_POWER),
-        "latency_ms": m.get(SID_LATENCY),
-        "state": STATE_NAMES.get(m.get(SID_STATE)),
-        "stations": m.get(SID_ASSOCIATED_STATIONS),
+        "name": ap.get(SID_AP_NAME),
+        "enabled": ap.get(SID_ENABLED),
+        "ssid": ap.get(SID_SSID),
+        "band": INT_TO_BAND.get(ap.get(SID_BAND)),
+        "channel": ap.get(SID_CHANNEL),
+        "tx_power": ap.get(SID_TX_POWER),
+        "latency_ms": ap.get(SID_LATENCY),
+        "state": STATE_NAMES.get(ap.get(SID_STATE)),
+        "devices": [
+            {"mac": d.get(SID_MAC), "hostname": d.get(SID_HOSTNAME),
+             "ip": d.get(SID_IP_ADDRESS), "signal_dbm": d.get(SID_SIGNAL_DBM),
+             "connected": d.get(SID_CONNECTED)}
+            for d in devs
+        ],
     }
+
+
+def _report_sizes(label, s):
+    nc, cc = s["netconf"], s["coreconf"]
+    LOG.info("  size for '%s':", label)
+    LOG.info("    NETCONF  (XML)      payload=%4d B  wire=%4d B",
+             nc["payload"], nc["wire"])
+    LOG.info("    CORECONF (CBOR/SID) payload=%4d B  wire=%4d B",
+             cc["payload"], cc["wire"])
+    LOG.info("    -> CORECONF is %sx smaller (payload), %sx (wire)",
+             s["ratio_payload"], s["ratio_wire"])
 
 
 async def get_all(ctx):
     req = Message(code=Code.GET, uri=SERVER)
     resp = await ctx.request(req).response
     data = cbor2.loads(resp.payload)
-    entries = data[SID_HOTSPOTS][SID_HOTSPOT]
-    LOG.info("GET  -> %d hotspot(s):", len(entries))
-    for e in entries:
-        LOG.info("        %s", _pretty(e))
-    return entries
-
-
-def _entry_body(name, leaves=None):
-    e = {SID_NAME: name}
-    if leaves:
-        e.update(leaves)
-    return {SID_HOTSPOTS: {SID_HOTSPOT: [e]}}
+    ap = data.get(SID_WIFI_AP, {})
+    LOG.info("GET -> %s", _pretty_ap(ap))
+    return ap
 
 
 async def _ipatch(ctx, body, label):
@@ -80,25 +95,21 @@ async def _ipatch(ctx, body, label):
     return resp.code.is_successful()
 
 
-async def add_hotspot(ctx, name, ssid, band="band-5g", channel=36, tx_power=23):
-    body = _entry_body(name, {
-        SID_SSID: ssid,
-        SID_BAND: BAND_TO_INT[band],
-        SID_CHANNEL: channel,
-        SID_TX_POWER: tx_power,
-    })
-    return await _ipatch(ctx, body, f"iPATCH add hotspot '{name}'")
+async def set_channel(ctx, channel):
+    cc_body = coreconf_ap_leaf(SID_CHANNEL, channel)
+    nc_xml = netconf_ap_leaf("channel", channel)
+    _report_sizes(f"set AP channel={channel}",
+                  sizes(nc_xml, cc_body, coreconf_is_seq=True))
+    return await _ipatch(ctx, cc_body, f"iPATCH set AP channel={channel}")
 
 
-async def set_latency(ctx, name, latency_ms):
-    body = _entry_body(name, {SID_LATENCY: latency_ms})
-    return await _ipatch(ctx, body,
-                         f"iPATCH set '{name}' latency={latency_ms}ms")
-
-
-async def enable(ctx, name):
-    body = _entry_body(name, {SID_ENABLED: True})
-    return await _ipatch(ctx, body, f"iPATCH enable '{name}'")
+async def connect_device(ctx, mac, hostname, ip):
+    leaves = {SID_HOSTNAME: hostname, SID_IP_ADDRESS: ip}
+    cc_body = coreconf_device_entry(mac, leaves)
+    nc_xml = netconf_device_entry(mac, {"hostname": hostname, "ip-address": ip})
+    _report_sizes(f"connect device {mac}",
+                  sizes(nc_xml, cc_body, coreconf_is_seq=True))
+    return await _ipatch(ctx, cc_body, f"iPATCH connect device '{mac}'")
 
 
 async def main():
@@ -107,14 +118,11 @@ async def main():
     LOG.info("--- initial state ---")
     await get_all(ctx)
 
-    LOG.info("--- adding a hotspot 'lobby' ---")
-    await add_hotspot(ctx, "lobby", ssid="lobby-guest")
+    LOG.info("--- cascade: manager sets AP channel to 44 ---")
+    await set_channel(ctx, 44)
 
-    LOG.info("--- setting lobby latency target to 35 ms ---")
-    await set_latency(ctx, "lobby", 35)
-
-    LOG.info("--- enabling lobby radio ---")
-    await enable(ctx, "lobby")
+    LOG.info("--- cascade: connect a device ---")
+    await connect_device(ctx, "aa:bb:cc:00:11:22", "laptop-1", "192.0.2.50")
 
     LOG.info("--- final state ---")
     await get_all(ctx)

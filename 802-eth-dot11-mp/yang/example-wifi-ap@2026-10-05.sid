@@ -1,0 +1,35 @@
+{
+  "ietf-sid-file:sid-file": {
+    "module-name": "example-wifi-ap",
+    "module-revision": "2026-10-05",
+    "description": "SID assignments for the example-wifi-ap module. The AP<->device hop uses CORECONF (CoAP/CBOR/SID). SIDs for the wifi-ap container, its leaves, and the device list are allocated from the example range 70000+ (real deployments use a registered range per RFC 9595).",
+    "assignment-range": [
+      {
+        "entry-point": "70000",
+        "size": "100"
+      }
+    ],
+    "item": [
+      { "namespace": "module",   "identifier": "example-wifi-ap",                                 "sid": "70000" },
+      { "namespace": "identity", "identifier": "radio-state",                                     "sid": "70001" },
+      { "namespace": "identity", "identifier": "down",                                            "sid": "70002" },
+      { "namespace": "identity", "identifier": "scanning",                                        "sid": "70003" },
+      { "namespace": "identity", "identifier": "active",                                          "sid": "70004" },
+      { "namespace": "data",     "identifier": "/example-wifi-ap:wifi-ap",                        "sid": "70010" },
+      { "namespace": "data",     "identifier": "/example-wifi-ap:wifi-ap/name",                   "sid": "70011" },
+      { "namespace": "data",     "identifier": "/example-wifi-ap:wifi-ap/enabled",               "sid": "70012" },
+      { "namespace": "data",     "identifier": "/example-wifi-ap:wifi-ap/ssid",                   "sid": "70013" },
+      { "namespace": "data",     "identifier": "/example-wifi-ap:wifi-ap/band",                   "sid": "70014" },
+      { "namespace": "data",     "identifier": "/example-wifi-ap:wifi-ap/channel",                "sid": "70015" },
+      { "namespace": "data",     "identifier": "/example-wifi-ap:wifi-ap/tx-power",              "sid": "70016" },
+      { "namespace": "data",     "identifier": "/example-wifi-ap:wifi-ap/latency",                "sid": "70017" },
+      { "namespace": "data",     "identifier": "/example-wifi-ap:wifi-ap/state",                  "sid": "70018" },
+      { "namespace": "data",     "identifier": "/example-wifi-ap:wifi-ap/device",                 "sid": "70020" },
+      { "namespace": "data",     "identifier": "/example-wifi-ap:wifi-ap/device/mac",             "sid": "70021" },
+      { "namespace": "data",     "identifier": "/example-wifi-ap:wifi-ap/device/hostname",        "sid": "70022" },
+      { "namespace": "data",     "identifier": "/example-wifi-ap:wifi-ap/device/ip-address",      "sid": "70023" },
+      { "namespace": "data",     "identifier": "/example-wifi-ap:wifi-ap/device/signal-dbm",      "sid": "70024" },
+      { "namespace": "data",     "identifier": "/example-wifi-ap:wifi-ap/device/connected",       "sid": "70025" }
+    ]
+  }
+}

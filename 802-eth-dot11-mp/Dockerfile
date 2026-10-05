@@ -1,4 +1,4 @@
-# CORECONF 802.11 Wi-Fi hotspot example — self-contained image.
+# NETCONF/CORECONF 802 management-chain example — self-contained image.
 #
 # Build:  docker build -t wifi-coreconf .
 # Run:    docker run --rm -p 8080:8080 wifi-coreconf

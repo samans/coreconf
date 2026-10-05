@@ -41,24 +41,31 @@ PYTHON = str(VENV_PY) if VENV_PY.exists() else sys.executable
 HTTP_HOST = os.environ.get("WEBUI_HOST", "127.0.0.1")
 HTTP_PORT = int(os.environ.get("WEBUI_PORT", "8080"))
 
-# CORECONF operations the UI can trigger, with descriptions.
+# Management-chain operations the UI can trigger, with descriptions. Each
+# mutation cascades station --NETCONF--> switch --NETCONF--> ap --CORECONF--> device.
 OPERATIONS = {
-    "get":         "GET /c   — read all hotspots",
-    "fetch":       "FETCH /c — read the hotspots list",
-    "add":         "iPATCH /c — add a new hotspot (keyed list entry)",
-    "enable":      "iPATCH /c — enable a hotspot's radio",
-    "disable":     "iPATCH /c — disable a hotspot's radio",
-    "set-latency": "iPATCH /c — set a hotspot's target latency (ms)",
+    "get":         "Read AP state (cascades NETCONF → NETCONF → CORECONF)",
+    "set-channel": "Set AP channel (cascaded edit-config → iPATCH)",
+    "set-latency": "Set AP latency target (ms)",
+    "set-power":   "Set AP tx-power (dBm)",
+    "set-ssid":    "Set AP SSID",
+    "enable":      "Enable the AP radio",
+    "disable":     "Disable the AP radio",
+    "connect":     "Associate a device (CORECONF add on the AP↔device hop)",
+    "disconnect":  "Disconnect a device",
 }
 
 # Which optional parameters each operation accepts (for passing to flow_client).
 OP_PARAMS = {
     "get":         [],
-    "fetch":       [],
-    "add":         ["name", "ssid", "band", "channel", "tx_power", "latency"],
-    "enable":      ["name"],
-    "disable":     ["name"],
-    "set-latency": ["name", "latency"],
+    "set-channel": ["channel"],
+    "set-latency": ["latency"],
+    "set-power":   ["tx_power"],
+    "set-ssid":    ["ssid"],
+    "enable":      [],
+    "disable":     [],
+    "connect":     ["mac", "hostname", "ip"],
+    "disconnect":  ["mac"],
 }
 
 
@@ -248,6 +255,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        # never cache the UI assets so edits show up on a normal reload
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.end_headers()
         self.wfile.write(data)
 

@@ -1,0 +1,159 @@
+module example-wifi-ap {
+  yang-version 1.1;
+  namespace "urn:example:wifi-ap";
+  prefix ap;
+
+  organization
+    "CORECONF / NETCONF 802 Example";
+  contact
+    "editor@example.com";
+  description
+    "YANG model for an IEEE 802.11 Wi-Fi access point in the three-node
+     management chain:
+
+       [mgmt station] --NETCONF--> [switch] --NETCONF--> [wifi-ap]
+                                                --CORECONF--> [devices]
+
+     The switch manages this access point over NETCONF (XML over SSH).
+     The access point in turn manages the client stations ('devices')
+     below it over CORECONF (CoAP + CBOR + SID).
+
+     The AP is modeled as a single radio container (enabled, ssid, band,
+     channel, tx-power, a writable latency target, and read-only state),
+     holding a keyed list of associated devices. Each device entry mirrors
+     the CORECONF datastore the AP keeps for its downstream clients.";
+
+  revision 2026-10-05 {
+    description
+      "Initial revision. Single-radio access point owning a list of
+       associated devices managed via CORECONF.";
+    reference "RFC 6241 (NETCONF); draft-ietf-core-comi (CORECONF)";
+  }
+
+  // ---- operational radio states (identities) ----
+  identity radio-state {
+    description "Base identity for the current radio state.";
+  }
+  identity down {
+    base radio-state;
+    description "The radio is administratively or operationally down.";
+  }
+  identity scanning {
+    base radio-state;
+    description "The radio is up and scanning / idle (no clients).";
+  }
+  identity active {
+    base radio-state;
+    description "The radio is up and serving associated stations.";
+  }
+
+  // ---- 802.11 band enumeration ----
+  typedef wifi-band {
+    type enumeration {
+      enum band-2g4 { description "2.4 GHz band (802.11b/g/n)."; }
+      enum band-5g  { description "5 GHz band (802.11a/n/ac/ax)."; }
+      enum band-6g  { description "6 GHz band (802.11ax / Wi-Fi 6E)."; }
+    }
+    description "Operating frequency band of the access point.";
+  }
+
+  container wifi-ap {
+    description "The 802.11 access point node (a single radio).";
+
+    // ---- configuration (writable) ----
+    leaf name {
+      type string { length "1..32"; }
+      default "ap-1";
+      description "Administrative name of the access point.";
+    }
+
+    leaf enabled {
+      type boolean;
+      default false;
+      description "Enables (true) or disables (false) the radio.";
+    }
+
+    leaf ssid {
+      type string { length "1..32"; }
+      default "corp-wifi";
+      description "Broadcast network name (SSID).";
+    }
+
+    leaf band {
+      type wifi-band;
+      default band-5g;
+      description "Operating frequency band.";
+    }
+
+    leaf channel {
+      type uint8 { range "1..196"; }
+      default 36;
+      description "Operating channel number within the selected band.";
+    }
+
+    leaf tx-power {
+      type uint8 { range "1..30"; }
+      units "dBm";
+      default 20;
+      description "Radio transmit power in dBm.";
+    }
+
+    leaf latency {
+      type uint32 { range "0..10000"; }
+      units "milliseconds";
+      default 0;
+      description
+        "Target / configured round-trip latency budget for this AP,
+         in milliseconds.";
+    }
+
+    // ---- operational state (read-only) ----
+    leaf state {
+      type identityref { base radio-state; }
+      config false;
+      description "Current operational state of the radio.";
+    }
+
+    // ---- downstream devices managed over CORECONF ----
+    list device {
+      key "mac";
+      description
+        "A client station associated with this AP. The AP manages these
+         entries via CORECONF (CoAP/CBOR/SID) toward each device.";
+
+      leaf mac {
+        type string {
+          pattern "[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}";
+        }
+        description "Device MAC address (list key).";
+      }
+
+      leaf hostname {
+        type string { length "0..64"; }
+        default "";
+        description "Device hostname, if known.";
+      }
+
+      leaf ip-address {
+        type string { length "0..45"; }
+        default "";
+        description "Assigned IP address, if any.";
+      }
+
+      leaf signal-dbm {
+        type int8 { range "-120..0"; }
+        units "dBm";
+        default -60;
+        description "Received signal strength for this device.";
+      }
+
+      leaf connected {
+        type boolean;
+        default true;
+        description
+          "Whether the device is currently associated. Setting this to
+           false (or deleting the entry) disconnects the device.";
+      }
+    }
+  }
+}

@@ -1,0 +1,74 @@
+module example-switch {
+  yang-version 1.1;
+  namespace "urn:example:switch";
+  prefix sw;
+
+  organization
+    "CORECONF / NETCONF 802 Example";
+  contact
+    "editor@example.com";
+  description
+    "YANG model for an Ethernet (802.3) switch that sits between a NETCONF
+     management station and a downstream Wi-Fi access point.
+
+     Management chain modeled by this example:
+
+       [mgmt station] --NETCONF--> [switch] --NETCONF--> [wifi-ap]
+                                                --CORECONF--> [devices]
+
+     This module describes the switch node. The management station speaks
+     NETCONF (XML over SSH, RFC 6241) to the switch; the switch in turn is
+     a NETCONF client toward the access point. The switch exposes basic
+     config (name, management address, admin state) and operational state
+     (uplink status, port count) plus a reference to the AP it fronts.";
+
+  revision 2026-10-05 {
+    description
+      "Initial revision. Introduces the three-node management chain
+       (switch -> wifi-ap -> devices) to demonstrate NETCONF vs CORECONF
+       encoding sizes.";
+    reference "RFC 6241 (NETCONF); draft-ietf-core-comi (CORECONF)";
+  }
+
+  container switch {
+    description "The managed Ethernet switch node.";
+
+    // ---- configuration (writable) ----
+    leaf name {
+      type string { length "1..64"; }
+      default "core-switch-1";
+      description "Administrative name of the switch.";
+    }
+
+    leaf mgmt-address {
+      type string { length "1..64"; }
+      default "192.0.2.1";
+      description "Management IP address the station connects to (NETCONF).";
+    }
+
+    leaf enabled {
+      type boolean;
+      default true;
+      description "Administrative state of the switch.";
+    }
+
+    leaf ap-uplink-port {
+      type uint8 { range "1..48"; }
+      default 1;
+      description "Switch port on which the Wi-Fi access point is attached.";
+    }
+
+    // ---- operational state (read-only) ----
+    leaf uplink-up {
+      type boolean;
+      config false;
+      description "Whether the uplink toward the AP is operationally up.";
+    }
+
+    leaf port-count {
+      type uint8;
+      config false;
+      description "Number of physical ports on the switch.";
+    }
+  }
+}
