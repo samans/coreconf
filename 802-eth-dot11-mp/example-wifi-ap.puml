@@ -1,0 +1,42 @@
+@startuml example-wifi-ap
+' PlantUML class-diagram view of the example-wifi-ap YANG model.
+' Render with:  plantuml example-wifi-ap.puml   (produces PNG/SVG)
+
+skinparam backgroundColor #0B0F14
+skinparam shadowing false
+skinparam defaultFontName "DejaVu Sans Mono"
+skinparam class {
+  BackgroundColor #121823
+  BorderColor #3FB950
+  ArrowColor #8B98A9
+  FontColor #E6EDF3
+  AttributeFontColor #E6EDF3
+  StereotypeFontColor #8B98A9
+}
+
+class "wifi-ap" <<container>> as ap #121823 {
+  + name       : string
+  + enabled    : boolean
+  + ssid       : string
+  + band       : wifi-band
+  + channel    : uint8 [1..196]
+  + tx-power   : uint8 (dBm)
+  + latency    : uint32 (ms)
+  ~ state      : identityref {ro}
+}
+
+class "device" <<list>> as dev #121823 {
+  {field} <&key> mac : string {key}
+  + hostname   : string
+  + ip-address : string
+  + signal-dbm : int8 (dBm)
+  + connected  : boolean
+}
+
+ap "1" *-- "0..*" dev : "key: mac"
+
+note bottom of ap
+  config false => read-only (state)
+  everything else is read-write
+end note
+@enduml
