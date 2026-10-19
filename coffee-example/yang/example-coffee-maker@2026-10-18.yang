@@ -1,0 +1,229 @@
+module example-coffee-maker {
+  yang-version 1.1;
+  namespace "urn:example:coffee-maker";
+  prefix coffee;
+
+  organization
+    "CORECONF Coffee Example";
+  contact
+    "editor@example.com";
+  description
+    "A YANG model demonstrating CORECONF (management over CoAP, per
+     draft-ietf-core-comi) for a fleet of coffee makers.
+
+     A 'coffee-maker-manager' container owns a keyed list of
+     'coffee-maker' entries. Each maker can be individually powered on or
+     off, configured (cups, strength), brewed, and monitored (operational
+     state, water level, bean level, whether it still has coffee). The
+     manager talks to each maker over CORECONF: CBOR payloads over CoAP
+     keyed by numeric YANG SIDs (RFC 9254 / RFC 9595).";
+
+  revision 2026-10-18 {
+    description
+      "Fleet revision: replace the single coffee-maker container with a
+       coffee-maker-manager owning a keyed coffee-maker list, and add
+       richer operational state (bean level, cups brewed, out-of-coffee
+       detection, error reporting).";
+    reference "draft-ietf-core-comi-21";
+  }
+  revision 2026-09-14 {
+    description "Initial revision (single coffee maker).";
+    reference "draft-ietf-core-comi-21";
+  }
+
+  /* ---- operational-state identities ---- */
+  identity brew-state {
+    description "Base identity for a coffee maker's operational state.";
+  }
+  identity off {
+    base brew-state;
+    description "The coffee maker is powered off.";
+  }
+  identity idle {
+    base brew-state;
+    description "Powered on, ready, but not brewing.";
+  }
+  identity brewing {
+    base brew-state;
+    description "Actively brewing a cup.";
+  }
+  identity no-water {
+    base brew-state;
+    description "Powered on but cannot brew: the water reservoir is empty.";
+  }
+  identity no-beans {
+    base brew-state;
+    description "Powered on but out of coffee beans/grounds.";
+  }
+  identity error {
+    base brew-state;
+    description "The coffee maker reported a fault.";
+  }
+
+  /* ---- brew strength ---- */
+  typedef brew-strength {
+    type enumeration {
+      enum mild;
+      enum medium;
+      enum strong;
+    }
+    description "Requested brew strength.";
+  }
+
+  container coffee-maker-manager {
+    description
+      "Top-level container representing the coffee-maker manager. It owns a
+       list of the coffee makers under management, each reached over
+       CORECONF.";
+
+    leaf name {
+      type string {
+        length "1..32";
+      }
+      default "barista-1";
+      description "Human-readable name of this manager instance.";
+    }
+
+    leaf maker-count {
+      type uint8;
+      config false;
+      description "Number of coffee makers currently under management.";
+    }
+
+    list coffee-maker {
+      key "id";
+      description
+        "One managed coffee maker. Keyed by a stable identifier so the
+         manager can address each maker individually over CORECONF.";
+
+      leaf id {
+        type string {
+          length "1..32";
+        }
+        description "Stable identifier / key for this coffee maker.";
+      }
+
+      // ---- Configuration (writable) ----
+      leaf location {
+        type string {
+          length "0..64";
+        }
+        description "Where this coffee maker physically sits (free text).";
+      }
+
+      leaf power {
+        type boolean;
+        default false;
+        description "Turns this coffee maker on (true) or off (false).";
+      }
+
+      leaf cups {
+        type uint8 {
+          range "1..12";
+        }
+        default 1;
+        description "Number of cups to brew per brew cycle.";
+      }
+
+      leaf strength {
+        type brew-strength;
+        default medium;
+        description "Requested brew strength.";
+      }
+
+      // ---- Operational state (read-only) ----
+      leaf state {
+        type identityref {
+          base brew-state;
+        }
+        config false;
+        description "Current operational state of this coffee maker.";
+      }
+
+      leaf water-level {
+        type uint8;
+        units "percent";
+        config false;
+        description "Remaining water in the reservoir, as a percentage.";
+      }
+
+      leaf beans-level {
+        type uint8;
+        units "percent";
+        config false;
+        description
+          "Remaining coffee beans/grounds, as a percentage. Zero means the
+           maker is out of coffee.";
+      }
+
+      leaf has-coffee {
+        type boolean;
+        config false;
+        description
+          "True if the maker still has both water and beans and can brew a
+           cup right now.";
+      }
+
+      leaf cups-brewed {
+        type uint32;
+        config false;
+        description "Lifetime count of cups brewed by this maker.";
+      }
+
+      leaf last-error {
+        type string;
+        config false;
+        description "Most recent fault message, if any (empty when healthy).";
+      }
+
+      // ---- Actions ----
+      action brew {
+        description "Start a brew cycle on this maker if it can brew.";
+        output {
+          leaf started {
+            type boolean;
+            mandatory true;
+            description "True if a brew cycle was started.";
+          }
+          leaf reason {
+            type string;
+            description "Why the brew did not start (empty on success).";
+          }
+        }
+      }
+
+      action refill {
+        description
+          "Refill this maker's coffee beans and water reservoir (top both up
+           to full) and clear any fault. Use this when a maker is low on, or
+           out of, coffee.";
+        input {
+          leaf beans {
+            type boolean;
+            default true;
+            description "Refill the coffee beans/grounds to 100%.";
+          }
+          leaf water {
+            type boolean;
+            default true;
+            description "Refill the water reservoir to 100%.";
+          }
+        }
+        output {
+          leaf beans-level {
+            type uint8;
+            units "percent";
+            mandatory true;
+            description "Beans level after the refill.";
+          }
+          leaf water-level {
+            type uint8;
+            units "percent";
+            mandatory true;
+            description "Water level after the refill.";
+          }
+        }
+      }
+    }
+  }
+}

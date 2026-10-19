@@ -1,0 +1,10 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.git/
+.gitignore
+*.md
+Dockerfile
+.dockerignore
+oscore-contexts/

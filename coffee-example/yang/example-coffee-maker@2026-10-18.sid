@@ -1,0 +1,51 @@
+{
+  "ietf-sid-file:sid-file": {
+    "module-name": "example-coffee-maker",
+    "module-revision": "2026-10-18",
+    "description": "SID assignments for the example-coffee-maker module (fleet revision). In a real deployment these SIDs are allocated from a registered SID range (see RFC 9595). We use the experimental/example range 60000+ here.",
+    "assignment-range": [
+      {
+        "entry-point": "60000",
+        "size": "100"
+      }
+    ],
+    "item": [
+      { "namespace": "module",   "identifier": "example-coffee-maker",                                                "sid": "60000" },
+
+      { "namespace": "identity", "identifier": "brew-state",                                                          "sid": "60001" },
+      { "namespace": "identity", "identifier": "off",                                                                 "sid": "60002" },
+      { "namespace": "identity", "identifier": "idle",                                                                "sid": "60003" },
+      { "namespace": "identity", "identifier": "brewing",                                                             "sid": "60004" },
+      { "namespace": "identity", "identifier": "no-water",                                                            "sid": "60005" },
+      { "namespace": "identity", "identifier": "no-beans",                                                            "sid": "60006" },
+      { "namespace": "identity", "identifier": "error",                                                               "sid": "60007" },
+
+      { "namespace": "data",     "identifier": "/example-coffee-maker:coffee-maker-manager",                          "sid": "60010" },
+      { "namespace": "data",     "identifier": "/example-coffee-maker:coffee-maker-manager/name",                     "sid": "60011" },
+      { "namespace": "data",     "identifier": "/example-coffee-maker:coffee-maker-manager/maker-count",              "sid": "60012" },
+
+      { "namespace": "data",     "identifier": "/example-coffee-maker:coffee-maker-manager/coffee-maker",             "sid": "60020" },
+      { "namespace": "data",     "identifier": "/example-coffee-maker:coffee-maker-manager/coffee-maker/id",          "sid": "60021" },
+      { "namespace": "data",     "identifier": "/example-coffee-maker:coffee-maker-manager/coffee-maker/location",    "sid": "60022" },
+      { "namespace": "data",     "identifier": "/example-coffee-maker:coffee-maker-manager/coffee-maker/power",       "sid": "60023" },
+      { "namespace": "data",     "identifier": "/example-coffee-maker:coffee-maker-manager/coffee-maker/cups",        "sid": "60024" },
+      { "namespace": "data",     "identifier": "/example-coffee-maker:coffee-maker-manager/coffee-maker/strength",    "sid": "60025" },
+      { "namespace": "data",     "identifier": "/example-coffee-maker:coffee-maker-manager/coffee-maker/state",       "sid": "60026" },
+      { "namespace": "data",     "identifier": "/example-coffee-maker:coffee-maker-manager/coffee-maker/water-level", "sid": "60027" },
+      { "namespace": "data",     "identifier": "/example-coffee-maker:coffee-maker-manager/coffee-maker/beans-level", "sid": "60028" },
+      { "namespace": "data",     "identifier": "/example-coffee-maker:coffee-maker-manager/coffee-maker/has-coffee",  "sid": "60029" },
+      { "namespace": "data",     "identifier": "/example-coffee-maker:coffee-maker-manager/coffee-maker/cups-brewed", "sid": "60030" },
+      { "namespace": "data",     "identifier": "/example-coffee-maker:coffee-maker-manager/coffee-maker/last-error",  "sid": "60031" },
+
+      { "namespace": "data",     "identifier": "/example-coffee-maker:coffee-maker-manager/coffee-maker/brew",         "sid": "60032" },
+      { "namespace": "data",     "identifier": "/example-coffee-maker:coffee-maker-manager/coffee-maker/brew/started", "sid": "60033" },
+      { "namespace": "data",     "identifier": "/example-coffee-maker:coffee-maker-manager/coffee-maker/brew/reason",  "sid": "60034" },
+
+      { "namespace": "data",     "identifier": "/example-coffee-maker:coffee-maker-manager/coffee-maker/refill",             "sid": "60035" },
+      { "namespace": "data",     "identifier": "/example-coffee-maker:coffee-maker-manager/coffee-maker/refill/beans",       "sid": "60036" },
+      { "namespace": "data",     "identifier": "/example-coffee-maker:coffee-maker-manager/coffee-maker/refill/water",       "sid": "60037" },
+      { "namespace": "data",     "identifier": "/example-coffee-maker:coffee-maker-manager/coffee-maker/refill/beans-level", "sid": "60038" },
+      { "namespace": "data",     "identifier": "/example-coffee-maker:coffee-maker-manager/coffee-maker/refill/water-level", "sid": "60039" }
+    ]
+  }
+}

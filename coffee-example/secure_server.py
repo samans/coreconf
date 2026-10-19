@@ -39,11 +39,14 @@ from aiocoap import resource, Message, Code, Context
 from aiocoap.oscore_sitewrapper import OscoreSiteWrapper
 
 from coffee_sids import (
-    SID_COFFEE_MAKER, SID_STATE, SID_WATER_LEVEL, SID_BREW_STARTED,
-    SID_IDLE, SID_OFF, CF_YANG_DATA_CBOR, CF_YANG_INSTANCES_SEQ,
+    SID_MANAGER, SID_MAKER, SID_ID, SID_BREW, SID_BREW_STARTED,
+    SID_BREW_REASON, SID_REFILL, SID_REFILL_BEANS, SID_REFILL_WATER,
+    SID_REFILL_BEANS_LEVEL, SID_REFILL_WATER_LEVEL,
+    CF_YANG_DATA_CBOR, CF_YANG_INSTANCES_SEQ,
     DATASTORE_PATH,
 )
-from server import CoffeeDatastore, _decode_cbor_seq
+from server import FleetDatastore, decode_cbor_seq as _decode_cbor_seq, \
+    _extract_action
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger("coreconf-secure-server")
@@ -59,7 +62,7 @@ USER_ROLES = {
     ":coffee-bob": ("bob", "viewer"),        # read-only
 }
 
-DATASTORE = CoffeeDatastore()
+DATASTORE = FleetDatastore()
 
 
 def _role_for_request(request):
@@ -93,7 +96,7 @@ class SecureDatastoreResource(resource.Resource):
             return deny
         LOG.info("GET /c  (user=%s)", who[0])
         return Message(code=Code.CONTENT,
-                       payload=cbor2.dumps(DATASTORE.full_map()),
+                       payload=cbor2.dumps(DATASTORE.to_map()),
                        content_format=CF_YANG_DATA_CBOR)
 
     async def render_fetch(self, request):
@@ -101,13 +104,8 @@ class SecureDatastoreResource(resource.Resource):
         if deny:
             return deny
         LOG.info("FETCH /c  (user=%s)", who[0])
-        ids = _decode_cbor_seq(request.payload)
-        inner = DATASTORE.full_map()[SID_COFFEE_MAKER]
-        out = b""
-        for ident in ids:
-            sid = ident[0] if isinstance(ident, list) else ident
-            out += cbor2.dumps({sid: inner.get(sid)})
-        return Message(code=Code.CONTENT, payload=out,
+        return Message(code=Code.CONTENT,
+                       payload=cbor2.dumps(DATASTORE.to_map()),
                        content_format=CF_YANG_INSTANCES_SEQ)
 
     async def render_ipatch(self, request):
@@ -117,29 +115,46 @@ class SecureDatastoreResource(resource.Resource):
         LOG.info("iPATCH /c  (user=%s)", who[0])
         items = _decode_cbor_seq(request.payload)
         for item in items:
+            if not isinstance(item, dict):
+                return Message(code=Code.BAD_REQUEST,
+                               payload=b"malformed-message")
             for key, value in item.items():
-                if key == SID_COFFEE_MAKER and isinstance(value, dict):
-                    for child_sid, child_val in value.items():
-                        err = DATASTORE.apply_instance(child_sid, child_val)
-                        if err:
-                            return Message(code=Code.BAD_REQUEST,
-                                           payload=err.encode())
-                else:
-                    sid = key[0] if isinstance(key, (list, tuple)) else key
-                    err = DATASTORE.apply_instance(sid, value)
+                if key == SID_MANAGER:
+                    err = DATASTORE.apply_manager(value)
                     if err:
                         return Message(code=Code.BAD_REQUEST,
                                        payload=err.encode())
+                else:
+                    return Message(code=Code.BAD_REQUEST,
+                                   payload=f"unknown-element: SID {key}".encode())
         return Message(code=Code.CHANGED)
 
     async def render_post(self, request):
         who, deny = self._authorize(request, need_write=True)
         if deny:
             return deny
-        LOG.info("POST /c brew (user=%s)", who[0])
-        started = DATASTORE.power
-        return Message(code=Code.CHANGED,
-                       payload=cbor2.dumps({SID_BREW_STARTED: started}),
+        maker_id, action_sid, params = _extract_action(request.payload)
+        maker = DATASTORE.makers.get(maker_id) if maker_id else None
+        if maker is None:
+            return Message(code=Code.BAD_REQUEST,
+                           payload=b"missing or unknown coffee-maker 'id'")
+        if action_sid == SID_REFILL:
+            LOG.info("POST /c refill (user=%s) on '%s'", who[0], maker_id)
+            beans = params.get(SID_REFILL_BEANS, True)
+            water = params.get(SID_REFILL_WATER, True)
+            beans = True if not isinstance(beans, bool) else beans
+            water = True if not isinstance(water, bool) else water
+            beans_level, water_level = maker.refill(beans=beans, water=water)
+            out = {SID_REFILL_BEANS_LEVEL: beans_level,
+                   SID_REFILL_WATER_LEVEL: water_level}
+            return Message(code=Code.CHANGED, payload=cbor2.dumps(out),
+                           content_format=CF_YANG_DATA_CBOR)
+        LOG.info("POST /c brew (user=%s) on '%s'", who[0], maker_id)
+        started, reason = maker.brew()
+        out = {SID_BREW_STARTED: started}
+        if reason:
+            out[SID_BREW_REASON] = reason
+        return Message(code=Code.CHANGED, payload=cbor2.dumps(out),
                        content_format=CF_YANG_DATA_CBOR)
 
 

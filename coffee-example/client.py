@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """
-CORECONF client for the coffee-maker example.
+CORECONF client for the coffee-maker *fleet*.
 
-Demonstrates the CORECONF workflow against the server:
+    [coffee-maker manager] --CORECONF--> [coffee-maker fleet datastore]
 
-  1. GET the full datastore.
-  2. FETCH just the power + state leaves.
-  3. iPATCH to turn the coffee maker ON (and set cups/strength).
-  4. POST the 'brew' action.
-  5. GET again to confirm the new state.
+Demonstrates the CORECONF workflow against server.py:
+
+  1. GET the full datastore (manager container + coffee-maker list).
+  2. Turn one maker ON (iPATCH a single list entry, keyed by id).
+  3. Brew on that maker (POST the brew action with the maker id).
+  4. GET again to confirm the new state / remaining coffee.
+  5. Turn the maker OFF.
+
+For each mutation it prints the encoded size of the equivalent NETCONF (XML)
+message and the CORECONF (CBOR/SID) message, so you can see how much smaller
+CORECONF is for the same operation.
 
 All payloads are CBOR keyed by numeric YANG SIDs (RFC 9254 / RFC 9595).
 
@@ -23,114 +29,126 @@ import cbor2
 from aiocoap import Message, Code, Context
 
 from coffee_sids import (
-    SID_COFFEE_MAKER, SID_POWER, SID_CUPS, SID_STRENGTH, SID_STATE,
-    SID_WATER_LEVEL, SID_BREW_STARTED, SID_IDLE, SID_OFF, SID_BREWING,
-    STRENGTH_TO_INT, INT_TO_STRENGTH,
-    CF_YANG_DATA_CBOR, CF_YANG_IDENTIFIERS_SEQ, CF_YANG_INSTANCES_SEQ,
-    DATASTORE_PATH,
+    SID_MANAGER, SID_MGR_NAME, SID_MAKER_COUNT,
+    SID_MAKER, SID_ID, SID_LOCATION, SID_POWER, SID_CUPS, SID_STRENGTH,
+    SID_STATE, SID_WATER_LEVEL, SID_BEANS_LEVEL, SID_HAS_COFFEE,
+    SID_CUPS_BREWED, SID_LAST_ERROR,
+    SID_BREW_STARTED, SID_BREW_REASON,
+    INT_TO_STRENGTH, STATE_NAMES,
+    CF_YANG_INSTANCES_SEQ, CF_YANG_DATA_CBOR, DATASTORE_PATH,
+    coreconf_maker_leaf, coreconf_maker_entry,
+    netconf_maker_leaf, sizes,
 )
 
 logging.basicConfig(level=logging.INFO)
-LOG = logging.getLogger("coreconf-client")
+LOG = logging.getLogger("coreconf-coffee-client")
 
-STATE_NAMES = {SID_OFF: "off", SID_IDLE: "idle", SID_BREWING: "brewing"}
 SERVER = f"coap://localhost/{DATASTORE_PATH}"
 
 
-def _pretty(inner):
+def _pretty_maker(m):
     return {
-        "power": inner.get(SID_POWER),
-        "cups": inner.get(SID_CUPS),
-        "strength": INT_TO_STRENGTH.get(inner.get(SID_STRENGTH)),
-        "state": STATE_NAMES.get(inner.get(SID_STATE)),
-        "water_level": inner.get(SID_WATER_LEVEL),
+        "id": m.get(SID_ID),
+        "location": m.get(SID_LOCATION),
+        "power": m.get(SID_POWER),
+        "cups": m.get(SID_CUPS),
+        "strength": INT_TO_STRENGTH.get(m.get(SID_STRENGTH)),
+        "state": STATE_NAMES.get(m.get(SID_STATE)),
+        "water_level": m.get(SID_WATER_LEVEL),
+        "beans_level": m.get(SID_BEANS_LEVEL),
+        "has_coffee": m.get(SID_HAS_COFFEE),
+        "cups_brewed": m.get(SID_CUPS_BREWED),
+        "last_error": m.get(SID_LAST_ERROR),
     }
 
 
-async def get_full(ctx):
+def _report_sizes(label, s):
+    nc, cc = s["netconf"], s["coreconf"]
+    LOG.info("  size for '%s':", label)
+    LOG.info("    NETCONF  (XML)      payload=%4d B  wire=%4d B",
+             nc["payload"], nc["wire"])
+    LOG.info("    CORECONF (CBOR/SID) payload=%4d B  wire=%4d B",
+             cc["payload"], cc["wire"])
+    LOG.info("    -> CORECONF is %sx smaller (payload), %sx (wire)",
+             s["ratio_payload"], s["ratio_wire"])
+
+
+async def get_all(ctx):
     req = Message(code=Code.GET, uri=SERVER)
     resp = await ctx.request(req).response
     data = cbor2.loads(resp.payload)
-    LOG.info("GET  -> %s", _pretty(data[SID_COFFEE_MAKER]))
-    return data
+    mgr = data.get(SID_MANAGER, {})
+    makers = mgr.get(SID_MAKER, []) or []
+    LOG.info("GET -> manager=%r, %d maker(s):", mgr.get(SID_MGR_NAME),
+             mgr.get(SID_MAKER_COUNT))
+    for m in makers:
+        LOG.info("   %s", _pretty_maker(m))
+    return makers
 
 
-async def fetch_power_state(ctx):
-    # FETCH request: a CBOR sequence of instance-identifiers (bare SIDs).
-    payload = cbor2.dumps(SID_POWER) + cbor2.dumps(SID_STATE)
-    req = Message(code=Code.FETCH, uri=SERVER, payload=payload,
-                  content_format=CF_YANG_IDENTIFIERS_SEQ)
+async def _ipatch(ctx, body, label):
+    req = Message(code=Code.iPATCH, uri=SERVER, payload=cbor2.dumps(body),
+                  content_format=CF_YANG_INSTANCES_SEQ)
     resp = await ctx.request(req).response
-    items = _decode_cbor_seq(resp.payload)
-    merged = {}
-    for it in items:
-        merged.update(it)
-    LOG.info("FETCH power=%s state=%s", merged.get(SID_POWER),
-             STATE_NAMES.get(merged.get(SID_STATE)))
-    return merged
+    detail = ""
+    if not resp.code.is_successful() and resp.payload:
+        detail = " (" + resp.payload.decode(errors="replace") + ")"
+    LOG.info("%s -> %s%s", label, resp.code, detail)
+    return resp.code.is_successful()
 
 
-async def turn_on(ctx, cups=2, strength="strong"):
-    # iPATCH request: CBOR sequence of {instance-identifier: value} maps.
-    # We nest under the container SID to set several leaves at once.
-    body = {SID_COFFEE_MAKER: {
-        SID_POWER: True,
+async def set_power(ctx, maker_id, on):
+    cc_body = coreconf_maker_leaf(maker_id, SID_POWER, on)
+    nc_xml = netconf_maker_leaf(maker_id, "power", on)
+    _report_sizes(f"set maker '{maker_id}' power={on}",
+                  sizes(nc_xml, cc_body, coreconf_is_seq=True))
+    verb = "ON" if on else "OFF"
+    return await _ipatch(ctx, cc_body, f"iPATCH turn '{maker_id}' {verb}")
+
+
+async def configure(ctx, maker_id, cups, strength):
+    from coffee_sids import STRENGTH_TO_INT
+    cc_body = coreconf_maker_entry(maker_id, {
         SID_CUPS: cups,
         SID_STRENGTH: STRENGTH_TO_INT[strength],
-    }}
-    payload = cbor2.dumps(body)
-    req = Message(code=Code.iPATCH, uri=SERVER, payload=payload,
+    })
+    return await _ipatch(ctx, cc_body,
+                         f"iPATCH configure '{maker_id}' cups={cups} "
+                         f"strength={strength}")
+
+
+async def brew(ctx, maker_id):
+    body = {SID_MANAGER: {SID_MAKER: [{SID_ID: maker_id}]}}
+    req = Message(code=Code.POST, uri=SERVER, payload=cbor2.dumps(body),
                   content_format=CF_YANG_INSTANCES_SEQ)
-    resp = await ctx.request(req).response
-    LOG.info("iPATCH turn ON -> %s", resp.code)
-    return resp.code.is_successful()
-
-
-async def turn_off(ctx):
-    body = {SID_POWER: False}
-    payload = cbor2.dumps(body)
-    req = Message(code=Code.iPATCH, uri=SERVER, payload=payload,
-                  content_format=CF_YANG_INSTANCES_SEQ)
-    resp = await ctx.request(req).response
-    LOG.info("iPATCH turn OFF -> %s", resp.code)
-    return resp.code.is_successful()
-
-
-async def brew(ctx):
-    req = Message(code=Code.POST, uri=SERVER)
     resp = await ctx.request(req).response
     if resp.payload:
         out = cbor2.loads(resp.payload)
-        LOG.info("POST brew -> started=%s", out.get(SID_BREW_STARTED))
-
-
-def _decode_cbor_seq(data):
-    import io
-    items = []
-    while data:
-        stream = io.BytesIO(data)
-        items.append(cbor2.load(stream))
-        data = data[stream.tell():]
-    return items
+        LOG.info("POST brew '%s' -> started=%s reason=%r", maker_id,
+                 out.get(SID_BREW_STARTED), out.get(SID_BREW_REASON, ""))
+        return out.get(SID_BREW_STARTED)
+    LOG.info("POST brew '%s' -> %s", maker_id, resp.code)
+    return False
 
 
 async def main():
     ctx = await Context.create_client_context()
 
-    LOG.info("--- initial state ---")
-    await get_full(ctx)
-    await fetch_power_state(ctx)
+    LOG.info("--- initial fleet state ---")
+    await get_all(ctx)
 
-    LOG.info("--- turning the coffee maker ON ---")
-    await turn_on(ctx, cups=2, strength="strong")
-    await get_full(ctx)
+    LOG.info("--- turn 'lab' ON and configure it ---")
+    await set_power(ctx, "lab", True)
+    await configure(ctx, "lab", cups=2, strength="strong")
 
-    LOG.info("--- brewing ---")
-    await brew(ctx)
+    LOG.info("--- brew on 'lab' ---")
+    await brew(ctx, "lab")
 
-    LOG.info("--- turning the coffee maker OFF ---")
-    await turn_off(ctx)
-    await get_full(ctx)
+    LOG.info("--- final fleet state ---")
+    await get_all(ctx)
+
+    LOG.info("--- turn 'lab' OFF ---")
+    await set_power(ctx, "lab", False)
 
     await ctx.shutdown()
 
