@@ -80,6 +80,21 @@
   .dot.off { background: var(--danger); }
   code { font-family: var(--mono); color: var(--fleet); }
 
+  /* ---- one icon per coffee maker ---- */
+  .fleet-icons { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
+  .fleet-icons:empty { display: none; }
+  .fleet-icons .fi {
+    display: inline-flex; flex-direction: column; align-items: center; gap: 2px;
+    padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2);
+    min-width: 52px; transition: border-color .2s, box-shadow .2s;
+  }
+  .fleet-icons .fi.on  { border-color: var(--ok); }
+  .fleet-icons .fi.off { opacity: .55; }
+  .fleet-icons .fi .ficup { font-size: 24px; line-height: 1; }
+  .fleet-icons .fi .filbl { font-size: 10px; color: var(--muted); max-width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fleet-icons .fi.added { animation: popin .5s ease; }
+  @keyframes popin { 0%{transform:scale(.3);opacity:0} 60%{transform:scale(1.15)} 100%{transform:scale(1);opacity:1} }
+
   /* ---- fleet grid of maker cards ---- */
   .fleet-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
   .maker {
@@ -126,6 +141,9 @@
   .node .sub { font-size: 10px; color: var(--muted); font-family: var(--mono); }
   .node.n-manager { left: 6%; } .node.n-manager .name { color: var(--manager); } .node.n-manager .ring { border-color: var(--manager); }
   .node.n-fleet { right: 6%; } .node.n-fleet .name { color: var(--fleet); } .node.n-fleet .ring { border-color: var(--fleet); }
+  /* cluster of small cups inside the fleet node ring, one per maker */
+  #fleetNodeIcons { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 1px; font-size: 16px; line-height: 1; max-width: 62px; max-height: 62px; overflow: hidden; }
+  #fleetNodeIcons .nc { font-size: 10px; color: var(--muted); font-family: var(--mono); width: 100%; text-align: center; }
   .node.pulse .ring { animation: pulse .5s ease; }
   @keyframes pulse { 0%{transform:scale(1)} 50%{transform:scale(1.14)} 100%{transform:scale(1)} }
   .seg { position: absolute; top: 50%; height: 2px; transform: translateY(-50%);
@@ -212,6 +230,17 @@
   <div class="split" id="split">
   <div class="dashboard" id="dashboard">
 
+  <!-- Fleet dashboard (on top) -->
+  <div class="card">
+    <h2>Coffee Makers <span id="makerCount" class="pill" style="margin-left:auto;">—</span></h2>
+    <div class="body">
+      <div class="fleet-icons" id="fleetIcons" title="One icon per coffee maker in the fleet"></div>
+      <div class="fleet-grid" id="fleet">
+        <div class="empty">Start the fleet, then click <b>Refresh fleet</b> to load the coffee makers.</div>
+      </div>
+    </div>
+  </div>
+
   <!-- Server control -->
   <div class="card">
     <h2>Fleet CORECONF Datastore</h2>
@@ -228,17 +257,7 @@
     </div>
   </div>
 
-  <!-- Fleet dashboard -->
-  <div class="card">
-    <h2>Coffee Makers <span id="makerCount" class="pill" style="margin-left:auto;">—</span></h2>
-    <div class="body">
-      <div class="fleet-grid" id="fleet">
-        <div class="empty">Start the fleet, then click <b>Refresh fleet</b> to load the coffee makers.</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Manager operations -->
+  <!-- Manager operations (buttons, below the fleet) -->
   <div class="card">
     <h2>Manager Operations (CORECONF)</h2>
     <div class="body">
@@ -250,7 +269,9 @@
         <div class="formtitle">&#9881;&#65039; Act on a selected maker</div>
         <div class="fields">
           <label>Maker id
-            <input id="opId" placeholder="kitchen" value="kitchen" />
+            <select id="opId">
+              <option value="">— no makers —</option>
+            </select>
           </label>
           <label>Cups (1–12)
             <input id="opCups" type="number" min="1" max="12" value="2" />
@@ -297,7 +318,7 @@
           <div class="sub">CORECONF client</div>
         </div>
         <div class="node n-fleet" id="node-fleet">
-          <div class="ring"><span class="icon">&#9749;</span></div>
+          <div class="ring"><span class="icon" id="fleetNodeIcons">&#9749;</span></div>
           <div class="name">Coffee Fleet</div>
           <div class="sub">coap://[::]:5683/c</div>
         </div>
@@ -392,6 +413,7 @@ const $ = (id) => document.getElementById(id);
 
 let serverLogSince = 0, busy = false, useWire = false;
 let totNetconf = 0, totCoreconf = 0;
+let knownMakerIds = new Set();   // track makers so newly added ones animate in
 
 // ---- server control ------------------------------------------------------
 async function refreshStatus() {
@@ -451,10 +473,77 @@ function lowCoffee(m) {
   if (m.has_coffee === false) return true;
   return (m.beans_level ?? 100) < 20 || (m.water_level ?? 100) < 20;
 }
+// Populate the "Maker id" dropdown from the live fleet, preserving the
+// current selection when possible (falling back to the first maker).
+function populateMakerDropdown(makers) {
+  const sel = $("opId");
+  if (!sel) return;
+  const prev = sel.value;
+  if (!makers || !makers.length) {
+    sel.innerHTML = '<option value="">— no makers —</option>';
+    sel.value = "";
+    return;
+  }
+  sel.innerHTML = makers.map(m => {
+    const label = m.location ? `${m.id} (${m.location})` : m.id;
+    return `<option value="${m.id}">${label}</option>`;
+  }).join("");
+  // keep the previous selection if it still exists, else pick the first maker
+  sel.value = makers.some(m => m.id === prev) ? prev : makers[0].id;
+}
+
+// Render one coffee-maker icon per maker: a labelled row at the top of the
+// Coffee Makers card, plus a compact cluster inside the fleet node ring.
+// Makers that appear for the first time (e.g. just added) pop in.
+function renderFleetIcons(d, makers) {
+  const row = $("fleetIcons");
+  const nodeIcons = $("fleetNodeIcons");
+  const running = !!(d && d.running);
+
+  populateMakerDropdown(running ? makers : []);
+
+  if (row) {
+    if (!running || !makers.length) {
+      row.innerHTML = "";
+    } else {
+      row.innerHTML = "";
+      for (const m of makers) {
+        const isNew = !knownMakerIds.has(m.id);
+        const fi = document.createElement("div");
+        fi.className = "fi " + (m.power ? "on" : "off") + (isNew ? " added" : "");
+        fi.title = m.id + (m.location ? " — " + m.location : "");
+        fi.innerHTML = `<span class="ficup">&#9749;</span><span class="filbl">${m.id}</span>`;
+        fi.onclick = () => { $("opId").value = m.id; refreshFleet(); };
+        fi.style.cursor = "pointer";
+        row.appendChild(fi);
+      }
+    }
+  }
+
+  if (nodeIcons) {
+    if (!running || !makers.length) {
+      nodeIcons.innerHTML = "&#9749;";
+    } else {
+      // one small cup per maker (cap the visual count, show "+N" overflow)
+      const maxShown = 12;
+      const shown = Math.min(makers.length, maxShown);
+      let html = "";
+      for (let i = 0; i < shown; i++) html += "&#9749;";
+      if (makers.length > maxShown) html += `<span class="nc">+${makers.length - maxShown}</span>`;
+      nodeIcons.innerHTML = html;
+    }
+  }
+
+  // remember current ids so the next render only animates brand-new makers
+  if (running) knownMakerIds = new Set(makers.map(m => m.id));
+  else knownMakerIds = new Set();
+}
+
 function renderFleet(d) {
   const grid = $("fleet");
   const makers = (d && d.makers) || [];
   $("makerCount").textContent = (d && d.maker_count != null) ? (d.maker_count + " makers") : (makers.length + " makers");
+  renderFleetIcons(d, makers);
   if (!d || !d.running) {
     grid.innerHTML = '<div class="empty">Fleet not running. Start it, then refresh.</div>';
     return;
@@ -489,6 +578,25 @@ function renderFleet(d) {
   grid.querySelectorAll("button[data-act]").forEach(b => {
     b.onclick = () => { $("opId").value = b.dataset.sel; runOp(b.dataset.act, {id: b.dataset.sel}); };
   });
+
+  // if any maker is currently brewing, poll again shortly so its 'brewing'
+  // pill flips back to 'idle' on its own once the brew window elapses.
+  scheduleBrewRefresh(makers);
+}
+
+// Auto-refresh while a brew is in progress. The server reports 'brewing' for
+// a few seconds after a brew; this keeps the dashboard live without the user
+// clicking Refresh, then stops polling once nothing is brewing.
+let brewPollTimer = null;
+function scheduleBrewRefresh(makers) {
+  const anyBrewing = (makers || []).some(m => m.state === "brewing");
+  if (anyBrewing) {
+    if (brewPollTimer) return;          // already polling
+    brewPollTimer = setInterval(() => { if (!busy) refreshFleet(); }, 1500);
+  } else if (brewPollTimer) {
+    clearInterval(brewPollTimer);
+    brewPollTimer = null;
+  }
 }
 
 // ---- operation wiring ----------------------------------------------------
@@ -697,7 +805,7 @@ $("showNetconf").onchange = (e) => {
   $("msglog").classList.toggle("hide-netconf", !e.target.checked);
 };
 $("clearBtn").onclick = () => { $("msglog").innerHTML = '<div class="empty">No messages yet.</div>'; };
-$("opId").addEventListener("input", () => { refreshFleet(); });
+$("opId").addEventListener("change", () => { refreshFleet(); });
 
 // ---- boot ----------------------------------------------------------------
 wireOps();

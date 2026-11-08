@@ -22,6 +22,7 @@ Run:
 
 import asyncio
 import logging
+import time
 
 import cbor2
 from aiocoap import resource, Message, Code, Context
@@ -52,6 +53,9 @@ MAKER_WRITABLE = {SID_LOCATION, SID_POWER, SID_CUPS, SID_STRENGTH}
 WATER_PER_CUP = 8
 BEANS_PER_CUP = 5
 
+# how long a maker reports the 'brewing' state after a brew is started (seconds)
+BREW_DURATION = 6.0
+
 
 class CoffeeMaker:
     """In-memory state for one coffee maker (list entry)."""
@@ -68,8 +72,16 @@ class CoffeeMaker:
         self.beans_level = 100
         self.cups_brewed = 0
         self.last_error = ""
+        # monotonic timestamp until which the maker reports 'brewing';
+        # 0 means not currently brewing.
+        self.brewing_until = 0.0
 
     # -- derived operational state -----------------------------------------
+    @property
+    def is_brewing(self):
+        """True while inside the post-brew 'brewing' window."""
+        return time.monotonic() < self.brewing_until
+
     @property
     def has_coffee(self):
         """True if the maker has both water and beans to brew a cup now."""
@@ -81,6 +93,8 @@ class CoffeeMaker:
             return SID_ERROR
         if not self.power:
             return SID_OFF
+        if self.is_brewing:
+            return SID_BREWING
         if self.water_level < WATER_PER_CUP:
             return SID_NO_WATER
         if self.beans_level < BEANS_PER_CUP:
@@ -115,6 +129,9 @@ class CoffeeMaker:
             if not isinstance(value, bool):
                 return "invalid-value: power must be boolean"
             self.power = value
+            if not value:
+                # powering off ends any in-progress brew
+                self.brewing_until = 0.0
             LOG.info("maker '%s' powered %s", self.id,
                      "ON" if value else "OFF")
         elif sid == SID_CUPS:
@@ -146,6 +163,7 @@ class CoffeeMaker:
         self.water_level -= cups * WATER_PER_CUP
         self.beans_level -= cups * BEANS_PER_CUP
         self.cups_brewed += cups
+        self.brewing_until = time.monotonic() + BREW_DURATION
         LOG.info("maker '%s' brewed %d cup(s) [%s]; water=%d%% beans=%d%%",
                  self.id, cups, self.strength, self.water_level,
                  self.beans_level)

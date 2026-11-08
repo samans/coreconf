@@ -20,11 +20,11 @@ and the fleet datastore. It then adds **user security** with OSCORE
 | `yang/example-coffee-maker@2026-10-18.sid` | SID file mapping every schema node to a numeric YANG SID. |
 | `yang/example-coffee-maker@2026-09-14.yang` + `.sid` | Previous single-maker revision, kept for history. |
 | `coffee_sids.py` | Shared constants: CORECONF SIDs, CBOR helpers, NETCONF/CORECONF encoders, and the **size-comparison engine**. |
-| `server.py` | Plain (NoSec) CORECONF fleet datastore: `GET`/`FETCH`/`iPATCH`/`POST` on `/c`. Seeds four makers. |
+| `server.py` | Plain (NoSec) CORECONF fleet datastore: `GET`/`FETCH`/`iPATCH`/`POST` on `/c`. Seeds four makers. A brew holds the `brewing` state for a few seconds (`BREW_DURATION`). |
 | `client.py` | CLI client: reads the fleet, turns a maker on, brews, reads back, turns off. |
 | `webui/web_console.py` | Stdlib-only web server: runs operations, streams message events, and serves a fleet snapshot for the dashboard. |
 | `webui/flow_client.py` | Instrumented client that emits one JSON event per hop (request + response) with both encodings' sizes. |
-| `webui/index.html` | The UI: a live dashboard of maker cards, an animated manager&harr;fleet CORECONF hop, a messages pane, and a size-comparison panel. |
+| `webui/index.html` | The UI: a top fleet dashboard (one ☕ icon per maker + maker cards), Manager Operations controls below it with a live-populated **Maker id** dropdown, an animated manager&harr;fleet CORECONF hop, a messages pane, and a size-comparison panel. |
 | `setup_security.py` | Generates OSCORE security contexts for two users (alice, bob). |
 | `secure_server.py` | OSCORE-protected fleet server with per-user roles (operator vs. viewer). |
 | `secure_client.py` | OSCORE client demonstrating an authorized write (alice) and a denied write (bob). |
@@ -76,7 +76,10 @@ maps:
 - **POST `/c`** → invokes a maker's `brew` or `refill` action; the request
   selects the maker by `id` and carries the action SID (`brew` = 60032,
   `refill` = 60035). `brew` reports `started` plus a `reason` if it could not
-  brew (out of water / out of beans / powered off); `refill` ("add coffee")
+  brew (out of water / out of beans / powered off). A successful brew puts the
+  maker into the **`brewing`** state for a few seconds (`BREW_DURATION`, 6s by
+  default); during that window `state` reports `brewing`, then it returns to
+  `idle`. `refill` ("add coffee")
   tops the maker's beans and water back to 100% and clears any fault,
   returning the new `beans-level`/`water-level`.
 
@@ -109,11 +112,17 @@ Then open http://localhost:8080.
 
 1. Click **Start manager + fleet** (launches `server.py`, the fleet
    datastore seeded with four makers).
-2. The **Coffee Makers** dashboard shows a card per maker: power, state,
-   water/bean meters, whether it still **has coffee**, and cups brewed.
-3. **Act on a maker:** enter its `id` (or click a card button) and power it
-   on/off, **brew**, **add coffee** (refill beans + water — the button turns
-   red when a maker is low on or out of coffee), or change cups/strength.
+2. The **Coffee Makers** dashboard sits at the top of the page and shows a
+   row of one ☕ icon per maker (a new icon pops in when you add one) above a
+   card per maker: power, state, water/bean meters, whether it still **has
+   coffee**, and cups brewed. Brewing a maker flips its **state** pill to a
+   blue **brewing** for a few seconds — the dashboard auto-refreshes during
+   that window and the pill returns to **idle** when the brew finishes.
+3. **Act on a maker:** the **Manager Operations** controls sit below the
+   dashboard. Pick a maker from the **Maker id** dropdown (populated live from
+   the fleet — or click a card/icon to select it) and power it on/off,
+   **brew**, **add coffee** (refill beans + water — the button turns red when a
+   maker is low on or out of coffee), or change cups/strength.
    **Add** a brand-new maker too.
 4. Each action animates on the **manager → fleet** CORECONF hop. The
    **Messages** pane shows the real CORECONF (CBOR/SID) message plus the

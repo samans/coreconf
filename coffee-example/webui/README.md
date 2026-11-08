@@ -24,11 +24,15 @@ No extra UI dependencies: the backend uses only the Python standard library
 
 1. **Start manager + fleet** — launches `server.py` (NoSec CoAP on udp/5683),
    the fleet datastore seeded with four coffee makers. Its log streams live.
-2. **Coffee Makers dashboard** — a card per maker showing power, operational
-   state (idle / brewing / no-water / no-beans / error), water and bean
-   meters, whether it still **has coffee**, and the lifetime cup count. Each
-   card has inline **Turn on/off** and **Brew** buttons.
-3. **Manager Operations** — address a maker by its `id` key and:
+2. **Coffee Makers dashboard** (top of the page) — a row of one ☕ icon per
+   maker (a new icon pops in when you add one), above a card per maker showing
+   power, operational state (idle / brewing / no-water / no-beans / error),
+   water and bean meters, whether it still **has coffee**, and the lifetime
+   cup count. Each card has inline **Turn on/off** and **Brew** buttons.
+   Brewing shows a blue **brewing** pill for a few seconds (the dashboard
+   auto-refreshes until the brew finishes, then the pill returns to **idle**).
+3. **Manager Operations** (below the dashboard) — pick a maker from the
+   **Maker id** dropdown (populated live from the fleet) and:
 
    | Operation       | CORECONF exchange                                  |
    |-----------------|----------------------------------------------------|
@@ -37,7 +41,7 @@ No extra UI dependencies: the backend uses only the Python standard library
    | `power-off`     | iPATCH /c — turn a maker OFF                       |
    | `set-cups`      | iPATCH /c — set cups-per-brew                      |
    | `set-strength`  | iPATCH /c — set brew strength                      |
-   | `brew`          | POST /c — invoke the per-maker brew action         |
+   | `brew`          | POST /c — invoke the per-maker brew action (maker shows `brewing` for ~6s) |
    | `add`           | iPATCH /c — add a new maker to the fleet           |
 
 4. **Messages** pane — one entry per request/response, with the decoded
