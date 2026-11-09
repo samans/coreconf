@@ -174,12 +174,21 @@ def coreconf_maker_entry(maker_id, leaves=None):
 _NC_NS = 'xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"'
 
 
+def _xml_escape(text):
+    """Escape XML character-data special characters so values such as
+    'R&D Lab' produce well-formed XML (and realistic bytes)."""
+    return (str(text)
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;"))
+
+
 def _xml_val(value):
     if value is True:
         return "true"
     if value is False:
         return "false"
-    return str(value)
+    return _xml_escape(value)
 
 
 def _xml_edit_config(inner_xml):
@@ -266,4 +275,149 @@ def sizes(netconf_xml, coreconf_obj, coreconf_is_seq=False):
         "coreconf": {"payload": cc_p, "wire": cc_w},
         "ratio_payload": round(nc_p / cc_p, 1) if cc_p else None,
         "ratio_wire": round(nc_w / cc_w, 1) if cc_w else None,
+    }
+
+
+# =========================================================================
+# Processing-cost (CPU) comparison engine
+# =========================================================================
+#
+# The size engine above measures *bytes on the wire*. This engine measures
+# the *server-side CPU* needed to handle the SAME semantic operation under
+# each protocol, isolating the three stages where the encodings actually
+# differ (the datastore-apply logic is identical and is deliberately left
+# out so the comparison is apples-to-apples):
+#
+#   1. decode   — turn the received message bytes into an in-memory tree.
+#                   NETCONF : parse XML text   (xml.etree.ElementTree)
+#                   CORECONF: decode CBOR bytes (cbor2)
+#   2. dispatch — resolve every node in the message to its schema node.
+#                   NETCONF : namespaced element localname -> schema (string
+#                             key lookup, after stripping the "{ns}" prefix)
+#                   CORECONF: numeric SID -> schema          (int key lookup)
+#   3. encode   — serialize the in-memory tree back to message bytes.
+#                   NETCONF : build XML text
+#                   CORECONF: dump CBOR bytes
+#
+# Everything runs in-process so there is no network, SSH, or UDP noise: the
+# number reflects pure codec + schema-dispatch cost. Transport and crypto
+# (SSH vs CoAP/OSCORE) are intentionally excluded — see the README for how
+# to extend the comparison to those.
+#
+# Caveat: the ratio reflects these specific Python implementations
+# (xml.etree.ElementTree and cbor2), not the protocols in the abstract.
+
+import time
+import xml.etree.ElementTree as ET
+
+# name -> schema-node lookup table, modelling the server's schema index. The
+# "schema node" payload is irrelevant to the cost; what matters is a string
+# key (NETCONF) vs an int key (CORECONF) lookup, so both tables are built
+# from the one SID_NAMES map to stay in lock-step with the real model.
+_CC_SCHEMA = {sid: name for sid, name in SID_NAMES.items()}        # int  -> node
+_NC_SCHEMA = {name: sid for sid, name in SID_NAMES.items()}        # name -> node
+
+
+def _localname(tag):
+    """Strip an XML '{namespace}local' tag down to 'local'."""
+    return tag.rsplit("}", 1)[-1] if "}" in tag else tag
+
+
+def _nc_dispatch(elem):
+    """Walk a parsed NETCONF tree and resolve each element to its schema
+    node by local name — the string-keyed lookup a NETCONF server performs."""
+    hits = 0
+    for node in elem.iter():
+        if _NC_SCHEMA.get(_localname(node.tag)) is not None:
+            hits += 1
+    return hits
+
+
+def _cc_dispatch(obj):
+    """Walk a decoded CORECONF structure and resolve each SID key to its
+    schema node — the int-keyed lookup a CORECONF server performs."""
+    hits = 0
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(k, int) and _CC_SCHEMA.get(k) is not None:
+                hits += 1
+            hits += _cc_dispatch(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            hits += _cc_dispatch(v)
+    return hits
+
+
+def _time_us(fn, iterations):
+    """Run fn() `iterations` times, return mean microseconds per call."""
+    best = None
+    # a few repeats, keep the fastest batch to damp scheduler/GC jitter
+    for _ in range(5):
+        start = time.perf_counter()
+        for _ in range(iterations):
+            fn()
+        elapsed = time.perf_counter() - start
+        if best is None or elapsed < best:
+            best = elapsed
+    return (best / iterations) * 1e6
+
+
+def processing_costs(netconf_xml, coreconf_obj, coreconf_is_seq=False,
+                     iterations=2000):
+    """Measure and compare server-side CPU for one operation.
+
+    Returns a dict mirroring sizes(): per-stage microseconds for each
+    protocol, a total, and NETCONF/CORECONF ratios (how many times more CPU
+    NETCONF needs). `iterations` controls the timing loop length.
+    """
+    nc_bytes = netconf_xml.encode("utf-8")
+    if coreconf_is_seq:
+        cc_bytes = coreconf_obj if isinstance(coreconf_obj, (bytes, bytearray)) \
+            else cbor_seq(coreconf_obj)
+        cc_obj = decode_cbor_seq(bytes(cc_bytes))
+        cc_obj = cc_obj[0] if len(cc_obj) == 1 else cc_obj
+    else:
+        cc_bytes = cbor2.dumps(coreconf_obj)
+        cc_obj = coreconf_obj
+
+    # --- NETCONF (XML) stages --------------------------------------------
+    nc_decode = _time_us(lambda: ET.fromstring(nc_bytes), iterations)
+    nc_tree = ET.fromstring(nc_bytes)
+    nc_dispatch = _time_us(lambda: _nc_dispatch(nc_tree), iterations)
+    nc_encode = _time_us(lambda: ET.tostring(nc_tree, encoding="utf-8"),
+                         iterations)
+
+    # --- CORECONF (CBOR/SID) stages --------------------------------------
+    if coreconf_is_seq:
+        cc_decode = _time_us(lambda: decode_cbor_seq(bytes(cc_bytes)),
+                             iterations)
+    else:
+        cc_decode = _time_us(lambda: cbor2.loads(cc_bytes), iterations)
+    cc_dispatch = _time_us(lambda: _cc_dispatch(cc_obj), iterations)
+    cc_encode = _time_us(lambda: cbor2.dumps(cc_obj), iterations)
+
+    nc_total = nc_decode + nc_dispatch + nc_encode
+    cc_total = cc_decode + cc_dispatch + cc_encode
+
+    def _ratio(a, b):
+        return round(a / b, 1) if b else None
+
+    return {
+        "iterations": iterations,
+        "netconf": {
+            "decode_us": round(nc_decode, 3),
+            "dispatch_us": round(nc_dispatch, 3),
+            "encode_us": round(nc_encode, 3),
+            "total_us": round(nc_total, 3),
+        },
+        "coreconf": {
+            "decode_us": round(cc_decode, 3),
+            "dispatch_us": round(cc_dispatch, 3),
+            "encode_us": round(cc_encode, 3),
+            "total_us": round(cc_total, 3),
+        },
+        "ratio_decode": _ratio(nc_decode, cc_decode),
+        "ratio_dispatch": _ratio(nc_dispatch, cc_dispatch),
+        "ratio_encode": _ratio(nc_encode, cc_encode),
+        "ratio_total": _ratio(nc_total, cc_total),
     }

@@ -19,12 +19,13 @@ and the fleet datastore. It then adds **user security** with OSCORE
 | `yang/example-coffee-maker@2026-10-18.yang` | The YANG model: a `coffee-maker-manager` container owning a keyed **`coffee-maker` list**. Each maker has writable `power`, `cups`, `strength`, `location`; read-only `state`, `water-level`, `beans-level`, `has-coffee`, `cups-brewed`, `last-error`; and a `brew` action. |
 | `yang/example-coffee-maker@2026-10-18.sid` | SID file mapping every schema node to a numeric YANG SID. |
 | `yang/example-coffee-maker@2026-09-14.yang` + `.sid` | Previous single-maker revision, kept for history. |
-| `coffee_sids.py` | Shared constants: CORECONF SIDs, CBOR helpers, NETCONF/CORECONF encoders, and the **size-comparison engine**. |
+| `coffee_sids.py` | Shared constants: CORECONF SIDs, CBOR helpers, NETCONF/CORECONF encoders, the **size-comparison engine**, and the **processing-cost (CPU) engine** (`processing_costs()`). |
 | `server.py` | Plain (NoSec) CORECONF fleet datastore: `GET`/`FETCH`/`iPATCH`/`POST` on `/c`. Seeds four makers. A brew holds the `brewing` state for a few seconds (`BREW_DURATION`). |
 | `client.py` | CLI client: reads the fleet, turns a maker on, brews, reads back, turns off. |
+| `bench_processing.py` | CPU micro-benchmark: times decode + schema-dispatch + encode for each operation, comparing CORECONF vs NETCONF server-side processing cost. |
 | `webui/web_console.py` | Stdlib-only web server: runs operations, streams message events, and serves a fleet snapshot for the dashboard. |
 | `webui/flow_client.py` | Instrumented client that emits one JSON event per hop (request + response) with both encodings' sizes. |
-| `webui/index.html` | The UI: a top fleet dashboard (one ☕ icon per maker + maker cards), Manager Operations controls below it with a live-populated **Maker id** dropdown, an animated manager&harr;fleet CORECONF hop, a messages pane, and a size-comparison panel. |
+| `webui/index.html` | The UI: a top fleet dashboard (one ☕ icon per maker + maker cards), Manager Operations controls below it with a live-populated **Maker id** dropdown, an animated manager&harr;fleet CORECONF hop, a messages pane, and side-by-side **size** and **processing-cost (CPU)** comparison panels. |
 | `setup_security.py` | Generates OSCORE security contexts for two users (alice, bob). |
 | `secure_server.py` | OSCORE-protected fleet server with per-user roles (operator vs. viewer). |
 | `secure_client.py` | OSCORE client demonstrating an authorized write (alice) and a denied write (bob). |
@@ -161,6 +162,56 @@ POST brew 'lab' -> started=True reason=''
 The server **seeds the fleet on startup** with four makers (`kitchen`,
 `lobby`, `lab`, `breakout`) at different water/bean levels, so a fresh `get`
 returns a realistic fleet — including one maker that is out of water.
+
+## Compare processing cost (CPU), not just bytes
+
+The web UI's size panel answers *"how many bytes?"*. `bench_processing.py`
+answers the companion question *"how much CPU does the server spend handling
+the message?"* for the same operations.
+
+```bash
+python3 bench_processing.py                 # table, 2000 iterations/stage
+python3 bench_processing.py --iterations 5000
+python3 bench_processing.py --json          # machine-readable
+```
+
+It runs entirely in-process (no network/SSH/UDP) and times the three stages
+where the two encodings actually differ, for each operation:
+
+| Stage | NETCONF | CORECONF |
+|-------|---------|----------|
+| **decode**   | parse XML text (`xml.etree.ElementTree`) | decode CBOR bytes (`cbor2`) |
+| **dispatch** | element local-name → schema node (string-key lookup) | numeric SID → schema node (int-key lookup) |
+| **encode**   | serialize XML text | dump CBOR bytes |
+
+The datastore-apply logic is identical under both protocols, so it is left
+out to keep the comparison apples-to-apples. Example run (numbers vary by
+machine):
+
+```
+operation            proto        decode  dispatch    encode     total  ratio
+-----------------------------------------------------------------------------
+get (read fleet)     NETCONF        6.36      0.82     14.91     22.09
+                     CORECONF       0.68      0.18      0.57      1.43   15.5x
+...
+TOTAL (all ops)      NETCONF                                    273.92
+                     CORECONF                                    48.85    5.6x
+```
+
+So CORECONF needs roughly **5–6× less server CPU** across these operations,
+with XML parsing and serialization dominating NETCONF's cost. The core logic
+lives in `processing_costs()` in `coffee_sids.py`, alongside the size engine.
+The same numbers are surfaced live in the web UI's **Server Processing Cost
+(CPU)** panel, shown next to the size panel, for each operation you run.
+
+Caveats:
+
+- The ratio reflects these specific Python libraries
+  (`xml.etree.ElementTree` and `cbor2`), not the protocols in the abstract.
+  Swap in `lxml` or a C NETCONF stack and the absolute numbers change.
+- **Transport and crypto are excluded** (SSH/TLS session setup vs per-message
+  CoAP/OSCORE). Those are a separate axis; see the OSCORE section below for
+  the secured CORECONF server you could extend the benchmark to measure.
 
 ## Add user security (OSCORE + authorization)
 

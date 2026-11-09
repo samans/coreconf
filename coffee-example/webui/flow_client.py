@@ -47,11 +47,29 @@ from coffee_sids import (
     CF_YANG_INSTANCES_SEQ, DATASTORE_PATH, decode_cbor_seq, named,
     coreconf_maker_leaf, coreconf_maker_entry,
     netconf_maker_leaf, netconf_maker_entry, netconf_get,
-    sizes,
+    sizes, processing_costs,
     NODE_MANAGER, NODE_FLEET,
 )
 
 SERVER = f"coap://localhost/{DATASTORE_PATH}"
+
+
+# Interactive UI benchmark: keep the iteration count low so each operation
+# stays responsive (the CLI bench_processing.py uses a much larger count for
+# stable numbers). This is a quick per-operation estimate, not a rigorous
+# measurement.
+CPU_ITERATIONS = 300
+
+
+def _cpu(netconf_xml, coreconf_obj, coreconf_is_seq=False):
+    """Measure server-side processing cost for one operation, shaped for the
+    UI event stream."""
+    try:
+        return processing_costs(netconf_xml, coreconf_obj,
+                                coreconf_is_seq=coreconf_is_seq,
+                                iterations=CPU_ITERATIONS)
+    except Exception:
+        return None
 
 
 def emit(obj):
@@ -102,6 +120,9 @@ def _netconf_get_reply_xml(data):
             val = "true"
         elif val is False:
             val = "false"
+        else:
+            val = (str(val).replace("&", "&amp;")
+                   .replace("<", "&lt;").replace(">", "&gt;"))
         return f"<{tag}>{val}</{tag}>"
 
     body = leaf("name", mgr.get(SID_MGR_NAME))
@@ -129,7 +150,7 @@ def _netconf_get_reply_xml(data):
 
 
 def _hop_event(frm, to, direction, method, size_info,
-               label=None, payload=None, extra=None):
+               label=None, payload=None, extra=None, cpu_info=None):
     ev = {
         "dir": direction,            # "req" or "resp"
         "from": frm, "to": to,
@@ -145,6 +166,8 @@ def _hop_event(frm, to, direction, method, size_info,
             "ratio_payload": size_info["ratio_payload"],
             "ratio_wire": size_info["ratio_wire"],
         }
+    if cpu_info is not None:
+        ev["cpu"] = cpu_info
     if extra:
         ev.update(extra)
     emit(ev)
@@ -157,9 +180,11 @@ def _hop_event(frm, to, direction, method, size_info,
 async def _mutation(ctx, label, netconf_xml, cc_body, method="iPATCH"):
     """Animate a manager mutation: request down, real CoAP, response up."""
     s = sizes(netconf_xml, cc_body, coreconf_is_seq=True)
+    cpu = _cpu(netconf_xml, cc_body, coreconf_is_seq=True)
 
     _hop_event(NODE_MANAGER, NODE_FLEET, "req", method, s,
-               label=label, payload={"cbor-sid": named(cc_body)})
+               label=label, payload={"cbor-sid": named(cc_body)},
+               cpu_info=cpu)
 
     req = Message(code=Code.iPATCH, uri=SERVER,
                   payload=cbor2.dumps(cc_body),
@@ -192,10 +217,12 @@ async def op_get(ctx, a):
     s_resp = sizes(nc_reply_xml, cc_resp_bytes, coreconf_is_seq=True)
 
     pretty = _pretty_fleet(data)
+    cpu_resp = _cpu(nc_reply_xml, cc_resp_bytes, coreconf_is_seq=True)
     _hop_event(NODE_MANAGER, NODE_FLEET, "req", "GET", s_req,
                label="Read fleet state", payload={"(empty)": None})
     _hop_event(NODE_FLEET, NODE_MANAGER, "resp", str(resp.code), s_resp,
                label="data (fleet state)", payload=named(data),
+               cpu_info=cpu_resp,
                extra={"ok": resp.code.is_successful(), "decoded": pretty,
                       "code": str(resp.code), "refresh": True,
                       "size_label": "Read fleet state (response body)"})
@@ -253,8 +280,10 @@ async def op_brew(ctx, a):
         '</coffee-maker-manager></action></rpc>'
     )
     s = sizes(nc_xml, cc_body, coreconf_is_seq=True)
+    cpu = _cpu(nc_xml, cc_body, coreconf_is_seq=True)
     _hop_event(NODE_MANAGER, NODE_FLEET, "req", "POST (brew)", s,
-               label=f"Brew on '{a.id}'", payload={"cbor-sid": named(cc_body)})
+               label=f"Brew on '{a.id}'", payload={"cbor-sid": named(cc_body)},
+               cpu_info=cpu)
 
     req = Message(code=Code.POST, uri=SERVER, payload=cbor2.dumps(cc_body),
                   content_format=CF_YANG_INSTANCES_SEQ)
@@ -282,9 +311,10 @@ async def op_refill(ctx, a):
         '</coffee-maker-manager></action></rpc>'
     )
     s = sizes(nc_xml, cc_body, coreconf_is_seq=True)
+    cpu = _cpu(nc_xml, cc_body, coreconf_is_seq=True)
     _hop_event(NODE_MANAGER, NODE_FLEET, "req", "POST (refill)", s,
                label=f"Add coffee to '{a.id}'",
-               payload={"cbor-sid": named(cc_body)})
+               payload={"cbor-sid": named(cc_body)}, cpu_info=cpu)
 
     req = Message(code=Code.POST, uri=SERVER, payload=cbor2.dumps(cc_body),
                   content_format=CF_YANG_INSTANCES_SEQ)

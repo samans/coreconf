@@ -49,6 +49,12 @@ No extra UI dependencies: the backend uses only the Python standard library
 5. **Encoding Size Comparison** — NETCONF (XML) vs CORECONF (CBOR/SID) bytes
    for each operation, with a running "bytes saved" total. Toggle *include
    transport framing* for wire bytes.
+6. **Server Processing Cost (CPU)** — shown next to the size panel: the
+   server-side microseconds to **decode** + **dispatch** (schema lookup) +
+   **encode** each message, NETCONF (XML) vs CORECONF (CBOR/SID), with a
+   running total and ratio. Each bar is split into its decode/dispatch/encode
+   stages. Measured in-process per operation (transport/crypto excluded); the
+   same engine (`processing_costs()`) backs the `bench_processing.py` CLI.
 
 ## Configuration
 
