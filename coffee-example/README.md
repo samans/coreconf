@@ -30,6 +30,7 @@ and the fleet datastore. It then adds **user security** with OSCORE
 | `secure_server.py` | OSCORE-protected fleet server with per-user roles (operator vs. viewer). |
 | `secure_client.py` | OSCORE client demonstrating an authorized write (alice) and a denied write (bob). |
 | `run.sh` / `run.bat` / `Dockerfile` | One-command launchers for the web console. |
+| `DOCKER_SHARING.md` | Guide for sharing the Docker image and run instructions for recipients (build, export tarball, or push to a registry). |
 
 ## The YANG model
 
@@ -108,6 +109,11 @@ docker run --rm -p 8080:8080 coffee-coreconf
 ```
 
 Then open http://localhost:8080.
+
+> **Sharing the image?** See [`DOCKER_SHARING.md`](DOCKER_SHARING.md) for how
+> to distribute the containerized simulator (build from source, export a
+> tarball, or push to a registry) and copy/paste run instructions to give to
+> whoever runs it.
 
 ### Using it
 
