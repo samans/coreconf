@@ -47,6 +47,8 @@ from coffee_sids import (
     CF_YANG_INSTANCES_SEQ, DATASTORE_PATH, decode_cbor_seq, named,
     coreconf_maker_leaf, coreconf_maker_entry,
     netconf_maker_leaf, netconf_maker_entry, netconf_get,
+    restconf_maker_leaf, restconf_maker_entry, restconf_action,
+    restconf_get_empty, _rc_dumps,
     sizes, processing_costs,
     NODE_MANAGER, NODE_FLEET,
 )
@@ -61,11 +63,11 @@ SERVER = f"coap://localhost/{DATASTORE_PATH}"
 CPU_ITERATIONS = 300
 
 
-def _cpu(netconf_xml, coreconf_obj, coreconf_is_seq=False):
+def _cpu(netconf_xml, restconf_json, coreconf_obj, coreconf_is_seq=False):
     """Measure server-side processing cost for one operation, shaped for the
     UI event stream."""
     try:
-        return processing_costs(netconf_xml, coreconf_obj,
+        return processing_costs(netconf_xml, restconf_json, coreconf_obj,
                                 coreconf_is_seq=coreconf_is_seq,
                                 iterations=CPU_ITERATIONS)
     except Exception:
@@ -149,6 +151,38 @@ def _netconf_get_reply_xml(data):
     )
 
 
+def _restconf_get_reply_json(data):
+    """Build the RESTCONF (JSON, RFC 7951) response body that would carry the
+    same fleet subtree a CORECONF GET returns — used to size the *response*
+    direction apples-to-apples against the CBOR/SID body and the NETCONF XML
+    reply."""
+    mgr = (data or {}).get(SID_MANAGER, {}) or {}
+    makers = mgr.get(SID_MAKER, []) or []
+
+    maker_list = []
+    for m in makers:
+        maker_list.append({
+            "id": m.get(SID_ID),
+            "location": m.get(SID_LOCATION),
+            "power": m.get(SID_POWER),
+            "cups": m.get(SID_CUPS),
+            "strength": INT_TO_STRENGTH.get(m.get(SID_STRENGTH)),
+            "state": STATE_NAMES.get(m.get(SID_STATE)),
+            "water-level": m.get(SID_WATER_LEVEL),
+            "beans-level": m.get(SID_BEANS_LEVEL),
+            "has-coffee": m.get(SID_HAS_COFFEE),
+            "cups-brewed": m.get(SID_CUPS_BREWED),
+        })
+    body = {
+        "example-coffee-maker:coffee-maker-manager": {
+            "name": mgr.get(SID_MGR_NAME),
+            "maker-count": mgr.get(SID_MAKER_COUNT),
+            "coffee-maker": maker_list,
+        }
+    }
+    return _rc_dumps(body)
+
+
 def _hop_event(frm, to, direction, method, size_info,
                label=None, payload=None, extra=None, cpu_info=None):
     ev = {
@@ -160,12 +194,9 @@ def _hop_event(frm, to, direction, method, size_info,
         "payload": payload,
     }
     if size_info is not None:
-        ev["sizes"] = {
-            "netconf": size_info["netconf"],
-            "coreconf": size_info["coreconf"],
-            "ratio_payload": size_info["ratio_payload"],
-            "ratio_wire": size_info["ratio_wire"],
-        }
+        # size_info is already the protocol-list-driven dict from sizes();
+        # pass it through verbatim so the UI can iterate protocols.
+        ev["sizes"] = size_info
     if cpu_info is not None:
         ev["cpu"] = cpu_info
     if extra:
@@ -177,10 +208,11 @@ def _hop_event(frm, to, direction, method, size_info,
 # Operation primitives
 # =========================================================================
 
-async def _mutation(ctx, label, netconf_xml, cc_body, method="iPATCH"):
+async def _mutation(ctx, label, netconf_xml, restconf_json, cc_body,
+                    method="iPATCH"):
     """Animate a manager mutation: request down, real CoAP, response up."""
-    s = sizes(netconf_xml, cc_body, coreconf_is_seq=True)
-    cpu = _cpu(netconf_xml, cc_body, coreconf_is_seq=True)
+    s = sizes(netconf_xml, restconf_json, cc_body, coreconf_is_seq=True)
+    cpu = _cpu(netconf_xml, restconf_json, cc_body, coreconf_is_seq=True)
 
     _hop_event(NODE_MANAGER, NODE_FLEET, "req", method, s,
                label=label, payload={"cbor-sid": named(cc_body)},
@@ -209,35 +241,41 @@ async def op_get(ctx, a):
     resp = await ctx.request(req).response
     data = cbor2.loads(resp.payload) if resp.payload else {}
 
-    # request direction: NETCONF <get> vs empty CORECONF GET
-    s_req = sizes(nc_req_xml, {}, coreconf_is_seq=False)
+    # request direction: NETCONF <get> vs empty RESTCONF/CORECONF GET
+    s_req = sizes(nc_req_xml, restconf_get_empty(), {}, coreconf_is_seq=False)
     # response direction: the real data bodies
     nc_reply_xml = _netconf_get_reply_xml(data)
+    rc_reply_json = _restconf_get_reply_json(data)
     cc_resp_bytes = resp.payload if resp.payload else b""
-    s_resp = sizes(nc_reply_xml, cc_resp_bytes, coreconf_is_seq=True)
+    s_resp = sizes(nc_reply_xml, rc_reply_json, cc_resp_bytes,
+                   coreconf_is_seq=True)
 
     pretty = _pretty_fleet(data)
-    cpu_resp = _cpu(nc_reply_xml, cc_resp_bytes, coreconf_is_seq=True)
+    cpu_resp = _cpu(nc_reply_xml, rc_reply_json, cc_resp_bytes,
+                    coreconf_is_seq=True)
     _hop_event(NODE_MANAGER, NODE_FLEET, "req", "GET", s_req,
-               label="Read fleet state", payload={"(empty)": None})
+               label="Read fleet state", payload={"(empty)": None},
+               extra={"size_label": "Read fleet — request"})
     _hop_event(NODE_FLEET, NODE_MANAGER, "resp", str(resp.code), s_resp,
                label="data (fleet state)", payload=named(data),
                cpu_info=cpu_resp,
                extra={"ok": resp.code.is_successful(), "decoded": pretty,
                       "code": str(resp.code), "refresh": True,
-                      "size_label": "Read fleet state (response body)"})
+                      "size_label": "Read fleet — response"})
     return pretty
 
 
 async def op_power_on(ctx, a):
     await _mutation(ctx, f"Power ON maker '{a.id}'",
                     netconf_maker_leaf(a.id, "power", True),
+                    restconf_maker_leaf(a.id, "power", True),
                     coreconf_maker_leaf(a.id, SID_POWER, True))
 
 
 async def op_power_off(ctx, a):
     await _mutation(ctx, f"Power OFF maker '{a.id}'",
                     netconf_maker_leaf(a.id, "power", False),
+                    restconf_maker_leaf(a.id, "power", False),
                     coreconf_maker_leaf(a.id, SID_POWER, False))
 
 
@@ -245,6 +283,7 @@ async def op_set_cups(ctx, a):
     cups = a.cups if a.cups is not None else 1
     await _mutation(ctx, f"Set '{a.id}' cups = {cups}",
                     netconf_maker_leaf(a.id, "cups", cups),
+                    restconf_maker_leaf(a.id, "cups", cups),
                     coreconf_maker_leaf(a.id, SID_CUPS, cups))
 
 
@@ -253,6 +292,7 @@ async def op_set_strength(ctx, a):
     sint = STRENGTH_TO_INT.get(strength, 1)
     await _mutation(ctx, f"Set '{a.id}' strength = {strength}",
                     netconf_maker_leaf(a.id, "strength", strength),
+                    restconf_maker_leaf(a.id, "strength", strength),
                     coreconf_maker_leaf(a.id, SID_STRENGTH, sint))
 
 
@@ -264,6 +304,7 @@ async def op_add(ctx, a):
         nc_leaves["location"] = a.location
     await _mutation(ctx, f"Add maker '{a.id}'",
                     netconf_maker_entry(a.id, nc_leaves),
+                    restconf_maker_entry(a.id, nc_leaves),
                     coreconf_maker_entry(a.id, leaves))
 
 
@@ -279,8 +320,9 @@ async def op_brew(ctx, a):
         f'<coffee-maker><id>{a.id}</id><brew/></coffee-maker>'
         '</coffee-maker-manager></action></rpc>'
     )
-    s = sizes(nc_xml, cc_body, coreconf_is_seq=True)
-    cpu = _cpu(nc_xml, cc_body, coreconf_is_seq=True)
+    rc_json = restconf_action(a.id, "brew")
+    s = sizes(nc_xml, rc_json, cc_body, coreconf_is_seq=True)
+    cpu = _cpu(nc_xml, rc_json, cc_body, coreconf_is_seq=True)
     _hop_event(NODE_MANAGER, NODE_FLEET, "req", "POST (brew)", s,
                label=f"Brew on '{a.id}'", payload={"cbor-sid": named(cc_body)},
                cpu_info=cpu)
@@ -310,8 +352,9 @@ async def op_refill(ctx, a):
         f'<coffee-maker><id>{a.id}</id><refill/></coffee-maker>'
         '</coffee-maker-manager></action></rpc>'
     )
-    s = sizes(nc_xml, cc_body, coreconf_is_seq=True)
-    cpu = _cpu(nc_xml, cc_body, coreconf_is_seq=True)
+    rc_json = restconf_action(a.id, "refill")
+    s = sizes(nc_xml, rc_json, cc_body, coreconf_is_seq=True)
+    cpu = _cpu(nc_xml, rc_json, cc_body, coreconf_is_seq=True)
     _hop_event(NODE_MANAGER, NODE_FLEET, "req", "POST (refill)", s,
                label=f"Add coffee to '{a.id}'",
                payload={"cbor-sid": named(cc_body)}, cpu_info=cpu)

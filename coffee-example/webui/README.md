@@ -44,17 +44,26 @@ No extra UI dependencies: the backend uses only the Python standard library
    | `brew`          | POST /c — invoke the per-maker brew action (maker shows `brewing` for ~6s) |
    | `add`           | iPATCH /c — add a new maker to the fleet           |
 
-4. **Messages** pane — one entry per request/response, with the decoded
-   CBOR/SID (or XML) payload.
-5. **Encoding Size Comparison** — NETCONF (XML) vs CORECONF (CBOR/SID) bytes
-   for each operation, with a running "bytes saved" total. Toggle *include
-   transport framing* for wire bytes.
+4. **Messages** pane — one entry per request/response: the real CORECONF
+   (CBOR/SID) message plus **simulated** NETCONF (XML) and RESTCONF (JSON)
+   equivalents. Toggle each of **NETCONF** / **RESTCONF** on or off.
+5. **Encoding Size Comparison** — NETCONF (XML) vs RESTCONF (JSON) vs CORECONF
+   (CBOR/SID) bytes for each operation, three bars per op with per-protocol
+   running totals. Ratios are vs CORECONF (the baseline). Toggle *include
+   transport framing* for wire bytes. A read is split into **Read fleet —
+   request** and **Read fleet — response**: on the request side RESTCONF and
+   CORECONF carry *no body* (the cost is the URL + headers/framing), so those
+   bars read "no body (headers only)" in payload mode and only show bytes once
+   you include transport framing.
 6. **Server Processing Cost (CPU)** — shown next to the size panel: the
    server-side microseconds to **decode** + **dispatch** (schema lookup) +
-   **encode** each message, NETCONF (XML) vs CORECONF (CBOR/SID), with a
-   running total and ratio. Each bar is split into its decode/dispatch/encode
-   stages. Measured in-process per operation (transport/crypto excluded); the
-   same engine (`processing_costs()`) backs the `bench_processing.py` CLI.
+   **encode** each message, for all three protocols, with per-protocol running
+   totals and ratios vs CORECONF. Each bar is split into its
+   decode/dispatch/encode stages. Measured in-process per operation
+   (transport/crypto excluded); the same engine (`processing_costs()`) backs
+   the `bench_processing.py` CLI. Note: at these small message sizes
+   RESTCONF/JSON can match or beat CORECONF on CPU even while being far larger
+   on the wire — the two panels tell different halves of the story.
 
 ## Configuration
 

@@ -19,13 +19,13 @@ and the fleet datastore. It then adds **user security** with OSCORE
 | `yang/example-coffee-maker@2026-10-18.yang` | The YANG model: a `coffee-maker-manager` container owning a keyed **`coffee-maker` list**. Each maker has writable `power`, `cups`, `strength`, `location`; read-only `state`, `water-level`, `beans-level`, `has-coffee`, `cups-brewed`, `last-error`; and a `brew` action. |
 | `yang/example-coffee-maker@2026-10-18.sid` | SID file mapping every schema node to a numeric YANG SID. |
 | `yang/example-coffee-maker@2026-09-14.yang` + `.sid` | Previous single-maker revision, kept for history. |
-| `coffee_sids.py` | Shared constants: CORECONF SIDs, CBOR helpers, NETCONF/CORECONF encoders, the **size-comparison engine**, and the **processing-cost (CPU) engine** (`processing_costs()`). |
+| `coffee_sids.py` | Shared constants: CORECONF SIDs, CBOR helpers, NETCONF (XML) / RESTCONF (JSON) / CORECONF encoders, and the protocol-list-driven **size** and **processing-cost (CPU)** engines (`sizes()` / `processing_costs()`, CORECONF baseline). |
 | `server.py` | Plain (NoSec) CORECONF fleet datastore: `GET`/`FETCH`/`iPATCH`/`POST` on `/c`. Seeds four makers. A brew holds the `brewing` state for a few seconds (`BREW_DURATION`). |
 | `client.py` | CLI client: reads the fleet, turns a maker on, brews, reads back, turns off. |
-| `bench_processing.py` | CPU micro-benchmark: times decode + schema-dispatch + encode for each operation, comparing CORECONF vs NETCONF server-side processing cost. |
+| `bench_processing.py` | CPU micro-benchmark: times decode + schema-dispatch + encode for each operation, comparing NETCONF vs RESTCONF vs CORECONF server-side processing cost (ratios vs CORECONF). |
 | `webui/web_console.py` | Stdlib-only web server: runs operations, streams message events, and serves a fleet snapshot for the dashboard. |
 | `webui/flow_client.py` | Instrumented client that emits one JSON event per hop (request + response) with both encodings' sizes. |
-| `webui/index.html` | The UI: a top fleet dashboard (one ☕ icon per maker + maker cards), Manager Operations controls below it with a live-populated **Maker id** dropdown, an animated manager&harr;fleet CORECONF hop, a messages pane, and side-by-side **size** and **processing-cost (CPU)** comparison panels. |
+| `webui/index.html` | The UI: a top fleet dashboard (one ☕ icon per maker + maker cards), Manager Operations controls below it with a live-populated **Maker id** dropdown, an animated manager&harr;fleet CORECONF hop, a messages pane (NETCONF/RESTCONF simulated messages toggleable), and side-by-side **size** and **processing-cost (CPU)** panels comparing NETCONF vs RESTCONF vs CORECONF. |
 | `setup_security.py` | Generates OSCORE security contexts for two users (alice, bob). |
 | `secure_server.py` | OSCORE-protected fleet server with per-user roles (operator vs. viewer). |
 | `secure_client.py` | OSCORE client demonstrating an authorized write (alice) and a denied write (bob). |
@@ -133,11 +133,15 @@ Then open http://localhost:8080.
    **Add** a brand-new maker too.
 4. Each action animates on the **manager → fleet** CORECONF hop. The
    **Messages** pane shows the real CORECONF (CBOR/SID) message plus the
-   equivalent **simulated NETCONF (XML)** message, pretty-printed with line
-   breaks so its verbosity is obvious. Untick **show NETCONF** to hide the
-   NETCONF messages.
-5. The dashboard refreshes and the **size comparison** panel shows NETCONF
-   (XML) vs CORECONF (CBOR/SID) bytes with a running "bytes saved" total.
+   equivalent **simulated NETCONF (XML)** and **RESTCONF (JSON)** messages, so
+   their relative verbosity is obvious. Toggle **NETCONF** or **RESTCONF** off
+   to hide those.
+5. The dashboard refreshes and the side-by-side **size** and **processing-cost
+   (CPU)** panels compare NETCONF (XML) vs RESTCONF (JSON) vs CORECONF
+   (CBOR/SID) — three bars per operation, with ratios against CORECONF. A read
+   is shown as two blocks, **Read fleet — request** and **Read fleet —
+   response**; on the request side RESTCONF and CORECONF send no body, so those
+   bars read "no body (headers only)" unless you include transport framing.
 
 ## Run the plain CLI example
 
@@ -173,7 +177,8 @@ returns a realistic fleet — including one maker that is out of water.
 
 The web UI's size panel answers *"how many bytes?"*. `bench_processing.py`
 answers the companion question *"how much CPU does the server spend handling
-the message?"* for the same operations.
+the message?"* for the same operations — across **three** management
+protocols: NETCONF (XML), RESTCONF (JSON), and CORECONF (CBOR/SID).
 
 ```bash
 python3 bench_processing.py                 # table, 2000 iterations/stage
@@ -181,43 +186,53 @@ python3 bench_processing.py --iterations 5000
 python3 bench_processing.py --json          # machine-readable
 ```
 
-It runs entirely in-process (no network/SSH/UDP) and times the three stages
-where the two encodings actually differ, for each operation:
+It runs entirely in-process (no network/SSH/HTTP/UDP) and times the three
+stages where the encodings actually differ, for each operation:
 
-| Stage | NETCONF | CORECONF |
-|-------|---------|----------|
-| **decode**   | parse XML text (`xml.etree.ElementTree`) | decode CBOR bytes (`cbor2`) |
-| **dispatch** | element local-name → schema node (string-key lookup) | numeric SID → schema node (int-key lookup) |
-| **encode**   | serialize XML text | dump CBOR bytes |
+| Stage | NETCONF | RESTCONF | CORECONF |
+|-------|---------|----------|----------|
+| **decode**   | parse XML (`xml.etree.ElementTree`) | parse JSON (`json`) | decode CBOR (`cbor2`) |
+| **dispatch** | element local-name → schema (string-key) | JSON key → schema (string-key) | numeric SID → schema (int-key) |
+| **encode**   | serialize XML | dump JSON | dump CBOR |
 
-The datastore-apply logic is identical under both protocols, so it is left
-out to keep the comparison apples-to-apples. Example run (numbers vary by
-machine):
+The datastore-apply logic is identical under every protocol, so it is left
+out to keep the comparison apples-to-apples. **CORECONF is the baseline**;
+each ratio is that protocol's cost relative to CORECONF. Example run (numbers
+vary by machine):
 
 ```
-operation            proto        decode  dispatch    encode     total  ratio
------------------------------------------------------------------------------
-get (read fleet)     NETCONF        6.36      0.82     14.91     22.09
-                     CORECONF       0.68      0.18      0.57      1.43   15.5x
+operation            protocol                decode  dispatch    encode     total  ratio
+----------------------------------------------------------------------------------------
+get (read fleet)
+                     NETCONF (XML)             7.21      1.12     17.79     26.13   16.1x
+                     RESTCONF (JSON)           0.00      0.00      0.00      0.00    0.0x
+                     CORECONF (CBOR/SID)       0.68      0.12      0.81      1.62
 ...
-TOTAL (all ops)      NETCONF                                    273.92
-                     CORECONF                                    48.85    5.6x
+TOTAL (all ops)
+                     NETCONF (XML)                                         283.80    7.0x
+                     RESTCONF (JSON)                                        30.43    0.8x
+                     CORECONF (CBOR/SID)                                    40.49
 ```
 
-So CORECONF needs roughly **5–6× less server CPU** across these operations,
-with XML parsing and serialization dominating NETCONF's cost. The core logic
-lives in `processing_costs()` in `coffee_sids.py`, alongside the size engine.
-The same numbers are surfaced live in the web UI's **Server Processing Cost
-(CPU)** panel, shown next to the size panel, for each operation you run.
+So **NETCONF costs roughly 7× the server CPU of CORECONF**, dominated by XML
+parsing and serialization. **RESTCONF/JSON is competitive with CORECONF on
+CPU** — at these small message sizes CPython's C-accelerated `json` module can
+match or even beat `cbor2`, even though RESTCONF's *bytes on the wire* are much
+larger than CORECONF's (full node names + HTTP framing). That split — RESTCONF
+loses on size but not on CPU — is exactly why both panels are worth showing.
+The core logic lives in `processing_costs()` in `coffee_sids.py`, alongside
+the size engine; the same numbers are surfaced live in the web UI's **Server
+Processing Cost (CPU)** panel next to the size panel.
 
 Caveats:
 
 - The ratio reflects these specific Python libraries
-  (`xml.etree.ElementTree` and `cbor2`), not the protocols in the abstract.
-  Swap in `lxml` or a C NETCONF stack and the absolute numbers change.
-- **Transport and crypto are excluded** (SSH/TLS session setup vs per-message
-  CoAP/OSCORE). Those are a separate axis; see the OSCORE section below for
-  the secured CORECONF server you could extend the benchmark to measure.
+  (`xml.etree.ElementTree`, `json`, and `cbor2`), not the protocols in the
+  abstract. Swap in `lxml`, `orjson`, or a C stack and the numbers change.
+- **Transport and crypto are excluded** (SSH/TLS and HTTP/TLS session setup vs
+  per-message CoAP/OSCORE). Those are a separate axis; see the OSCORE section
+  below for the secured CORECONF server you could extend the benchmark to
+  measure.
 
 ## Add user security (OSCORE + authorization)
 

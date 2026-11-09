@@ -16,6 +16,7 @@
     --fleet: #d29922;
     --coreconf: #3fb950;
     --netconf: #f0883e;
+    --restconf: #a371f7;    /* RESTCONF (JSON) — purple */
     --accent: #c08457;      /* coffee brown */
     --ok: #3fb950;
     --warn: #d29922;
@@ -170,10 +171,12 @@
   .bar-row { display: grid; grid-template-columns: 150px 1fr 90px; gap: 10px; align-items: center; font-size: 12px; }
   .bar-row .lbl { font-family: var(--mono); }
   .bar-row.netconf .lbl { color: var(--netconf); }
+  .bar-row.restconf .lbl { color: var(--restconf); }
   .bar-row.coreconf .lbl { color: var(--coreconf); }
   .bar-track { background: #0e141d; border: 1px solid var(--border); border-radius: 6px; height: 20px; overflow: hidden; }
   .bar-fill { height: 100%; border-radius: 5px 0 0 5px; transition: width .5s ease; }
   .bar-row.netconf .bar-fill { background: var(--netconf); }
+  .bar-row.restconf .bar-fill { background: var(--restconf); }
   .bar-row.coreconf .bar-fill { background: var(--coreconf); }
   .bar-row .num { text-align: right; font-family: var(--mono); color: var(--text); }
   .ratio-badge { display: inline-block; font-family: var(--mono); font-weight: 700; color: var(--coreconf); border: 1px solid var(--coreconf); padding: 2px 8px; border-radius: 10px; font-size: 12px; }
@@ -181,6 +184,7 @@
   .totals .t { display: grid; gap: 2px; }
   .totals .t .v { font-family: var(--mono); font-size: 18px; font-weight: 700; }
   .totals .t.nc .v { color: var(--netconf); }
+  .totals .t.rc .v { color: var(--restconf); }
   .totals .t.cc .v { color: var(--coreconf); }
   .totals .t.sv .v { color: var(--manager); }
   .totals .t .l { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
@@ -203,13 +207,16 @@
   .msg .head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; font-family: var(--mono); font-size: 13px; }
   .msg.coreconf .head { background: rgba(63,185,80,.12); border-left: 3px solid var(--coreconf); }
   .msg.netconf .head { background: rgba(240,136,62,.12); border-left: 3px solid var(--netconf); }
+  .msg.restconf .head { background: rgba(163,113,247,.12); border-left: 3px solid var(--restconf); }
   .msg.err .head { background: rgba(248,81,73,.12); border-left: 3px solid var(--danger); }
-  .msg .tag { font-weight: 700; } .msg.coreconf .tag { color: var(--coreconf); } .msg.netconf .tag { color: var(--netconf); } .msg.err .tag { color: var(--danger); }
+  .msg .tag { font-weight: 700; } .msg.coreconf .tag { color: var(--coreconf); } .msg.netconf .tag { color: var(--netconf); } .msg.restconf .tag { color: var(--restconf); } .msg.err .tag { color: var(--danger); }
   .msg .hop { color: var(--muted); }
   .msg .meta { color: var(--muted); margin-left: auto; font-size: 11px; }
   .msg pre { margin: 0; padding: 10px 12px; background: #060a0f; font-family: var(--mono); font-size: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; color: var(--text); border-top: 1px solid var(--border); }
   .msg.netconf pre { color: #f0c89a; }
+  .msg.restconf pre { color: #d2b8fb; }
   .msglog.hide-netconf .msg.netconf { display: none; }
+  .msglog.hide-restconf .msg.restconf { display: none; }
   .empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
   .term { background: #060a0f; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-family: var(--mono); font-size: 12px; height: 110px; overflow-y: auto; white-space: pre-wrap; color: var(--muted); }
   .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
@@ -343,7 +350,8 @@
 
   <div class="card msgpane" id="msgpane">
     <h2>Messages
-      <label class="toggle" style="margin-left:auto;"><input type="checkbox" id="showNetconf" checked /> show NETCONF</label>
+      <label class="toggle" style="margin-left:auto;"><input type="checkbox" id="showNetconf" checked /> NETCONF</label>
+      <label class="toggle" style="margin-left:12px;"><input type="checkbox" id="showRestconf" checked /> RESTCONF</label>
       <button id="clearBtn" class="op" style="margin-left:12px;padding:4px 10px;font-size:12px;">Clear</button>
     </h2>
     <div class="body">
@@ -369,12 +377,12 @@
         </div>
       </div>
       <div class="totals" style="margin-top:16px;">
-        <div class="t nc"><span class="v" id="totNc">0 B</span><span class="l">NETCONF total</span></div>
-        <div class="t cc"><span class="v" id="totCc">0 B</span><span class="l">CORECONF total</span></div>
-        <div class="t sv"><span class="v" id="totSave">0 B</span><span class="l">Bytes saved</span></div>
-        <div class="t sv"><span class="v" id="totRatio">—</span><span class="l">Overall ratio</span></div>
+        <div class="t nc"><span class="v" id="totNc">0 B</span><span class="l">NETCONF</span></div>
+        <div class="t rc"><span class="v" id="totRc">0 B</span><span class="l">RESTCONF</span></div>
+        <div class="t cc"><span class="v" id="totCc">0 B</span><span class="l">CORECONF</span></div>
+        <div class="t sv"><span class="v" id="totRatio">—</span><span class="l">NETCONF ÷ CORECONF</span></div>
       </div>
-      <div class="hint">Payload sizes are the real serialized data units (XML text vs CBOR/SID). "Wire bytes" add a representative transport-framing estimate (NETCONF/SSH ≈ 88 B; CoAP header ≈ 8 B).</div>
+      <div class="hint">Payload sizes are the real serialized data units (XML vs JSON vs CBOR/SID). "Wire bytes" add a representative transport-framing estimate (NETCONF/SSH ≈ 88 B; RESTCONF/HTTP ≈ 150 B; CoAP header ≈ 8 B). Ratios on each bar are vs CORECONF (the baseline).</div>
     </div>
   </div>
 
@@ -383,6 +391,7 @@
     <h2>Server Processing Cost (CPU)
       <span class="toggle" id="cpuStage" style="gap:10px;">
         <span class="k"><span class="swatch" style="background:var(--netconf)"></span>NETCONF</span>
+        <span class="k"><span class="swatch" style="background:var(--restconf)"></span>RESTCONF</span>
         <span class="k"><span class="swatch" style="background:var(--coreconf)"></span>CORECONF</span>
       </span>
     </h2>
@@ -393,12 +402,12 @@
         </div>
       </div>
       <div class="totals" style="margin-top:16px;">
-        <div class="t nc"><span class="v" id="cpuTotNc">0 µs</span><span class="l">NETCONF total</span></div>
-        <div class="t cc"><span class="v" id="cpuTotCc">0 µs</span><span class="l">CORECONF total</span></div>
-        <div class="t sv"><span class="v" id="cpuTotSave">0 µs</span><span class="l">CPU saved</span></div>
-        <div class="t sv"><span class="v" id="cpuTotRatio">—</span><span class="l">Overall ratio</span></div>
+        <div class="t nc"><span class="v" id="cpuTotNc">0 µs</span><span class="l">NETCONF</span></div>
+        <div class="t rc"><span class="v" id="cpuTotRc">0 µs</span><span class="l">RESTCONF</span></div>
+        <div class="t cc"><span class="v" id="cpuTotCc">0 µs</span><span class="l">CORECONF</span></div>
+        <div class="t sv"><span class="v" id="cpuTotRatio">—</span><span class="l">NETCONF ÷ CORECONF</span></div>
       </div>
-      <div class="hint">Microseconds of server CPU to <b>decode</b> (parse) + <b>dispatch</b> (schema lookup) + <b>encode</b> (serialize) each message, measured in-process. XML (ElementTree) vs CBOR/SID (cbor2); transport/crypto excluded. Ratios vary by machine and library.</div>
+      <div class="hint">Microseconds of server CPU to <b>decode</b> (parse) + <b>dispatch</b> (schema lookup) + <b>encode</b> (serialize) each message, measured in-process. XML (ElementTree) vs JSON (json) vs CBOR/SID (cbor2); transport/crypto excluded. Ratios on each bar are vs CORECONF and vary by machine/library — at small message sizes CPython's C-accelerated JSON can match or beat CBOR.</div>
     </div>
   </div>
 
@@ -448,9 +457,13 @@ const $ = (id) => document.getElementById(id);
 })();
 
 let serverLogSince = 0, busy = false, useWire = false;
-let totNetconf = 0, totCoreconf = 0;
-let cpuTotNc = 0, cpuTotCc = 0;   // running CPU totals (microseconds)
+let sizeTotals = {netconf: 0, restconf: 0, coreconf: 0};   // running byte totals
+let cpuTotals  = {netconf: 0, restconf: 0, coreconf: 0};   // running µs totals
 let knownMakerIds = new Set();   // track makers so newly added ones animate in
+
+// protocol display order + labels, mirroring coffee_sids.PROTOCOLS
+const PROTO_ORDER = ["netconf", "restconf", "coreconf"];
+const PROTO_LABEL = {netconf: "NETCONF (XML)", restconf: "RESTCONF (JSON)", coreconf: "CORECONF"};
 
 // ---- server control ------------------------------------------------------
 async function refreshStatus() {
@@ -744,36 +757,56 @@ function addMessage(kind, title, hop, meta, payloadObj, isXml) {
 // ---- size comparison -----------------------------------------------------
 function sizeField(info) { return useWire ? info.wire : info.payload; }
 function renderComparison(label, sizes) {
+  if (!sizes || !sizes.protocols) return;
   const cmp = $("cmp"); clearEmpty(cmp);
-  const nc = sizeField(sizes.netconf), cc = sizeField(sizes.coreconf);
-  const ratio = useWire ? sizes.ratio_wire : sizes.ratio_payload;
-  const max = Math.max(nc, cc, 1);
+  const protos = sizes.protocols;
+  const vals = {};
+  PROTO_ORDER.forEach(pid => { if (protos[pid]) vals[pid] = sizeField(protos[pid]); });
+  const max = Math.max(...Object.values(vals), 1);
+  const ratios = useWire ? sizes.ratios_wire : sizes.ratios_payload;
+  const base = sizes.baseline || "coreconf";
+
+  const bars = PROTO_ORDER.filter(pid => protos[pid]).map(pid => {
+    const v = vals[pid];
+    // An empty body (e.g. a RESTCONF/CORECONF GET request) has no payload —
+    // its real cost is the URL + headers/framing, shown only in wire mode.
+    const noBody = (v === 0);
+    const r = noBody ? ""
+            : (pid === base) ? "baseline"
+            : (ratios && ratios[pid] != null ? ratios[pid] + "×" : "—");
+    const numText = noBody
+      ? (useWire ? v + " B" : `<span style="color:var(--muted)">no body (headers only)</span>`)
+      : `${v} B <span style="color:var(--muted)">${r}</span>`;
+    return `<div class="bar-row ${pid}"><span class="lbl">${PROTO_LABEL[pid]}</span>` +
+      `<div class="bar-track"><div class="bar-fill" style="width:${(v/max*100).toFixed(1)}%"></div></div>` +
+      `<span class="num">${numText}</span></div>`;
+  }).join("");
+
   const block = document.createElement("div");
   block.className = "cmp-block";
-  block.innerHTML =
-    `<div class="op-title">${label} <span class="ratio-badge">${ratio}× smaller</span></div>` +
-    `<div class="bars">` +
-      `<div class="bar-row netconf"><span class="lbl">NETCONF (XML)</span>` +
-        `<div class="bar-track"><div class="bar-fill" style="width:${(nc/max*100).toFixed(1)}%"></div></div><span class="num">${nc} B</span></div>` +
-      `<div class="bar-row coreconf"><span class="lbl">CORECONF</span>` +
-        `<div class="bar-track"><div class="bar-fill" style="width:${(cc/max*100).toFixed(1)}%"></div></div><span class="num">${cc} B</span></div>` +
-    `</div>`;
+  block.innerHTML = `<div class="op-title">${label}</div><div class="bars">${bars}</div>`;
   cmp.prepend(block);
-  totNetconf += nc; totCoreconf += cc;
-  $("totNc").textContent = totNetconf + " B";
-  $("totCc").textContent = totCoreconf + " B";
-  $("totSave").textContent = (totNetconf - totCoreconf) + " B";
-  $("totRatio").textContent = totCoreconf ? (totNetconf/totCoreconf).toFixed(1) + "×" : "—";
+
+  PROTO_ORDER.forEach(pid => { if (vals[pid] != null) sizeTotals[pid] += vals[pid]; });
+  $("totNc").textContent = sizeTotals.netconf + " B";
+  $("totRc").textContent = sizeTotals.restconf + " B";
+  $("totCc").textContent = sizeTotals.coreconf + " B";
+  $("totRatio").textContent = sizeTotals.coreconf
+    ? (sizeTotals.netconf / sizeTotals.coreconf).toFixed(1) + "×" : "—";
 }
 
 // ---- processing-cost (CPU) comparison ------------------------------------
 function usFmt(v) { return (v >= 100 ? v.toFixed(0) : v.toFixed(1)) + " µs"; }
 function renderCpuComparison(label, cpu) {
-  if (!cpu || !cpu.netconf || !cpu.coreconf) return;
+  if (!cpu || !cpu.protocols) return;
   const cmp = $("cpu"); clearEmpty(cmp);
-  const nc = cpu.netconf.total_us, cc = cpu.coreconf.total_us;
-  const ratio = cpu.ratio_total;
-  const max = Math.max(nc, cc, 0.001);
+  const protos = cpu.protocols;
+  const totals = {};
+  PROTO_ORDER.forEach(pid => { if (protos[pid]) totals[pid] = protos[pid].total_us; });
+  const max = Math.max(...Object.values(totals), 0.001);
+  const ratios = cpu.ratios_total || {};
+  const base = cpu.baseline || "coreconf";
+
   // stacked stage breakdown (decode + dispatch + encode) within each bar
   const stages = (o) => {
     const parts = [
@@ -785,32 +818,41 @@ function renderCpuComparison(label, cpu) {
       `<span title="${p.k}: ${p.v} µs" style="display:inline-block;height:100%;width:${(p.v/max*100).toFixed(1)}%;background:${p.c}"></span>`
     ).join("");
   };
+
+  const bars = PROTO_ORDER.filter(pid => protos[pid]).map(pid => {
+    const o = protos[pid], v = o.total_us;
+    const noBody = (v === 0);
+    const r = noBody ? ""
+            : (pid === base) ? "baseline"
+            : (ratios[pid] != null ? ratios[pid] + "×" : "—");
+    const numText = noBody
+      ? `<span style="color:var(--muted)">no body (headers only)</span>`
+      : `${usFmt(v)} <span style="color:var(--muted)">${r}</span>`;
+    return `<div class="bar-row ${pid}"><span class="lbl">${PROTO_LABEL[pid]}</span>` +
+      `<div class="bar-track"><div class="bar-fill" style="width:${(v/max*100).toFixed(1)}%">${stages(o)}</div></div>` +
+      `<span class="num us">${numText}</span></div>`;
+  }).join("");
+
   const block = document.createElement("div");
   block.className = "cmp-block";
-  block.innerHTML =
-    `<div class="op-title">${label} <span class="ratio-badge">${ratio}× less CPU</span></div>` +
-    `<div class="bars">` +
-      `<div class="bar-row netconf"><span class="lbl">NETCONF (XML)</span>` +
-        `<div class="bar-track"><div class="bar-fill" style="width:${(nc/max*100).toFixed(1)}%">${stages(cpu.netconf)}</div></div>` +
-        `<span class="num us">${usFmt(nc)}</span></div>` +
-      `<div class="bar-row coreconf"><span class="lbl">CORECONF</span>` +
-        `<div class="bar-track"><div class="bar-fill" style="width:${(cc/max*100).toFixed(1)}%">${stages(cpu.coreconf)}</div></div>` +
-        `<span class="num us">${usFmt(cc)}</span></div>` +
-    `</div>`;
+  block.innerHTML = `<div class="op-title">${label}</div><div class="bars">${bars}</div>`;
   cmp.prepend(block);
-  cpuTotNc += nc; cpuTotCc += cc;
-  $("cpuTotNc").textContent = usFmt(cpuTotNc);
-  $("cpuTotCc").textContent = usFmt(cpuTotCc);
-  $("cpuTotSave").textContent = usFmt(Math.max(cpuTotNc - cpuTotCc, 0));
-  $("cpuTotRatio").textContent = cpuTotCc ? (cpuTotNc/cpuTotCc).toFixed(1) + "×" : "—";
+
+  PROTO_ORDER.forEach(pid => { if (totals[pid] != null) cpuTotals[pid] += totals[pid]; });
+  $("cpuTotNc").textContent = usFmt(cpuTotals.netconf);
+  $("cpuTotRc").textContent = usFmt(cpuTotals.restconf);
+  $("cpuTotCc").textContent = usFmt(cpuTotals.coreconf);
+  $("cpuTotRatio").textContent = cpuTotals.coreconf
+    ? (cpuTotals.netconf / cpuTotals.coreconf).toFixed(1) + "×" : "—";
 }
 
 // ---- event handling ------------------------------------------------------
 let needRefresh = false;
 async function handleEvent(ev) {
   if (ev.dir === "req" || ev.dir === "resp") {
+    const protos = ev.sizes && ev.sizes.protocols;
     let sizeText = "";
-    if (ev.sizes) sizeText = sizeField(ev.sizes.coreconf) + " B";
+    if (protos && protos.coreconf) sizeText = sizeField(protos.coreconf) + " B";
     const arrow = ev.dir === "req" ? "→" : "←";
     const isErr = ev.ok === false;
     await flyHop(ev.from, ev.to, ev.method, sizeText, isErr && ev.dir === "resp");
@@ -819,16 +861,24 @@ async function handleEvent(ev) {
     // Simulated NETCONF (XML) equivalent — shown for comparison whenever the
     // event carries the serialized XML. It is not sent on the wire; its byte
     // size is what the size-comparison panel measures.
-    if (ev.sizes && ev.sizes.netconf && ev.sizes.netconf.xml) {
-      const ncBytes = sizeField(ev.sizes.netconf);
+    if (protos && protos.netconf && protos.netconf.repr) {
+      const ncBytes = sizeField(protos.netconf);
       const ncTitle = (ev.label ? ev.label + " — " : "") + "NETCONF (simulated)";
       addMessage("netconf", ncTitle, hop,
-                 "NETCONF/XML · " + ncBytes + " B", ev.sizes.netconf.xml, true);
+                 "NETCONF/XML · " + ncBytes + " B", protos.netconf.repr, true);
+    }
+
+    // Simulated RESTCONF (JSON) equivalent — same idea, HTTP+JSON body.
+    if (protos && protos.restconf && protos.restconf.repr) {
+      const rcBytes = sizeField(protos.restconf);
+      const rcTitle = (ev.label ? ev.label + " — " : "") + "RESTCONF (simulated)";
+      addMessage("restconf", rcTitle, hop,
+                 "RESTCONF/JSON · " + rcBytes + " B", protos.restconf.repr);
     }
 
     // Real CORECONF (CBOR/SID) message.
     let meta = "CORECONF";
-    if (ev.sizes) meta += " · " + sizeField(ev.sizes.coreconf) + " B";
+    if (protos && protos.coreconf) meta += " · " + sizeField(protos.coreconf) + " B";
     if (ev.code) meta += " · " + ev.code;
     const title = (ev.label ? ev.label + " — " : "") + ev.method;
     addMessage(isErr && ev.dir === "resp" ? "err" : "coreconf", title, hop, meta, ev.payload);
@@ -880,6 +930,9 @@ async function runOp(op, params) {
 $("wireToggle").onchange = (e) => { useWire = e.target.checked; };
 $("showNetconf").onchange = (e) => {
   $("msglog").classList.toggle("hide-netconf", !e.target.checked);
+};
+$("showRestconf").onchange = (e) => {
+  $("msglog").classList.toggle("hide-restconf", !e.target.checked);
 };
 $("clearBtn").onclick = () => { $("msglog").innerHTML = '<div class="empty">No messages yet.</div>'; };
 $("opId").addEventListener("change", () => { refreshFleet(); });

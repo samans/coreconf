@@ -242,39 +242,172 @@ def netconf_get(subtree_xml):
 
 
 # =========================================================================
+# RESTCONF (HTTP + JSON) encoders for the SAME operations — comparison only
+# =========================================================================
+#
+# RESTCONF (RFC 8040) carries YANG data over HTTP as JSON (RFC 7951). Keys
+# are the full YANG node names (module-qualified at the top level), so it is
+# more compact than NETCONF/XML but far more verbose than CORECONF/CBOR+SID,
+# which uses numeric SIDs. These builders return the JSON *body* text for an
+# operation; `restconf_sizes()`-style measurement adds the HTTP request-line
+# + headers separately (see HTTP_FRAMING_BYTES).
+
+import json as _json
+
+_RC_MODULE = "example-coffee-maker"   # YANG module name (RFC 7951 namespace)
+
+
+def _rc_leaf_name(sid):
+    """Map a CORECONF SID to its RESTCONF/JSON leaf name."""
+    return SID_NAMES.get(sid, str(sid))
+
+
+def _rc_dumps(obj):
+    """Serialize a RESTCONF JSON body compactly (no superfluous spaces), the
+    way an on-the-wire RESTCONF message would be framed."""
+    return _json.dumps(obj, separators=(",", ":"))
+
+
+def restconf_maker_leaf(maker_id, leaf_name, value):
+    """RESTCONF body setting one leaf on one maker (JSON, RFC 7951).
+
+    The HTTP request would be e.g.
+        PUT /restconf/data/example-coffee-maker:coffee-maker-manager/
+            coffee-maker=<id>/<leaf>
+    with this JSON body selecting the target leaf."""
+    return _rc_dumps({f"{_RC_MODULE}:{leaf_name}": value})
+
+
+def restconf_maker_entry(maker_id, leaves=None):
+    """RESTCONF body for a whole coffee-maker list entry (JSON, RFC 7951).
+
+    The HTTP request would be e.g.
+        POST /restconf/data/example-coffee-maker:coffee-maker-manager
+    with this list-entry body."""
+    entry = {"id": maker_id}
+    for k, v in (leaves or {}).items():
+        entry[k] = v
+    return _rc_dumps({f"{_RC_MODULE}:coffee-maker": [entry]})
+
+
+def restconf_action(maker_id, action_name, input_obj=None):
+    """RESTCONF body invoking a YANG action on one maker (JSON, RFC 7951).
+
+    The HTTP request would be e.g.
+        POST /restconf/data/example-coffee-maker:coffee-maker-manager/
+             coffee-maker=<id>/<action>
+    with an (often empty) input container as the body."""
+    return _rc_dumps({f"{_RC_MODULE}:input": (input_obj or {})})
+
+
+def restconf_get_empty():
+    """A RESTCONF GET has no request body; the request cost is the URL + HTTP
+    headers (HTTP_FRAMING_BYTES). The body text is therefore empty."""
+    return ""
+
+
+# =========================================================================
 # Size-comparison engine
 # =========================================================================
 #
-# For a given semantic operation we serialize the SAME change two ways and
+# For a given semantic operation we serialize the SAME change three ways and
 # measure the real byte length of each encoding:
 #
-#   * NETCONF  : an <edit-config>/<get> RPC in XML (RFC 6241). Real XML text
-#                is generated and measured; we just don't ship it over SSH.
+#   * NETCONF  : an <edit-config>/<get> RPC in XML (RFC 6241).
+#   * RESTCONF : a JSON body over HTTP (RFC 8040 / RFC 7951) — full YANG node
+#                names as keys.
 #   * CORECONF : a CBOR map keyed by numeric SIDs (RFC 9254/9595), which is
 #                exactly what travels on the manager<->fleet CoAP hop.
+#
+# CORECONF is the baseline; ratios express how many times larger / more
+# expensive each other protocol is relative to it.
 
-NETCONF_FRAMING_BYTES = 88   # representative SSH record + TCP/IP overhead
-COAP_FRAMING_BYTES = 8       # ~4-byte CoAP header + Uri-Path/Content-Format opts
+NETCONF_FRAMING_BYTES = 88    # representative SSH record + TCP/IP overhead
+HTTP_FRAMING_BYTES = 150      # representative HTTP/1.1 request line + headers
+COAP_FRAMING_BYTES = 8        # ~4-byte CoAP header + Uri-Path/Content-Format opts
+
+# The baseline every comparison ratio is measured against.
+BASELINE_PROTOCOL = "coreconf"
+
+# Ordered protocol metadata so the engines, CLI, and UI can iterate rather
+# than hard-coding "netconf vs coreconf". 'kind' tells the CPU engine which
+# codec/dispatch path to time for each protocol.
+PROTOCOLS = [
+    {"id": "netconf",  "label": "NETCONF (XML)",   "kind": "xml",
+     "framing": NETCONF_FRAMING_BYTES},
+    {"id": "restconf", "label": "RESTCONF (JSON)", "kind": "json",
+     "framing": HTTP_FRAMING_BYTES},
+    {"id": "coreconf", "label": "CORECONF (CBOR/SID)", "kind": "cbor",
+     "framing": COAP_FRAMING_BYTES},
+]
+PROTOCOL_IDS = [p["id"] for p in PROTOCOLS]
+_PROTO_BY_ID = {p["id"]: p for p in PROTOCOLS}
 
 
-def sizes(netconf_xml, coreconf_obj, coreconf_is_seq=False):
-    """Measure and compare NETCONF vs CORECONF encodings of one operation."""
-    nc_payload = netconf_xml.encode("utf-8")
-    if coreconf_is_seq:
-        cc_payload = coreconf_obj if isinstance(coreconf_obj, (bytes, bytearray)) \
+def _as_bytes(text_or_bytes):
+    if isinstance(text_or_bytes, (bytes, bytearray)):
+        return bytes(text_or_bytes)
+    return str(text_or_bytes).encode("utf-8")
+
+
+def _coreconf_bytes(coreconf_obj, is_seq):
+    if is_seq:
+        return coreconf_obj if isinstance(coreconf_obj, (bytes, bytearray)) \
             else cbor_seq(coreconf_obj)
-    else:
-        cc_payload = cbor2.dumps(coreconf_obj)
+    return cbor2.dumps(coreconf_obj)
 
-    nc_p = len(nc_payload)
-    cc_p = len(cc_payload)
-    nc_w = nc_p + NETCONF_FRAMING_BYTES
-    cc_w = cc_p + COAP_FRAMING_BYTES
+
+def sizes(netconf_xml, restconf_json, coreconf_obj, coreconf_is_seq=False):
+    """Measure and compare NETCONF / RESTCONF / CORECONF encodings of one
+    operation.
+
+    Returns a protocol-list-driven dict (CORECONF is the baseline):
+
+        {
+          "baseline": "coreconf",
+          "protocols": {
+             "netconf":  {"payload", "wire", "repr": <xml str>},
+             "restconf": {"payload", "wire", "repr": <json str>},
+             "coreconf": {"payload", "wire", "repr": None},
+          },
+          "ratios_payload": {"netconf": x, "restconf": y},   # vs coreconf
+          "ratios_wire":    {"netconf": x, "restconf": y},
+        }
+    """
+    raw = {
+        "netconf": _as_bytes(netconf_xml),
+        "restconf": _as_bytes(restconf_json),
+        "coreconf": _as_bytes(_coreconf_bytes(coreconf_obj, coreconf_is_seq)),
+    }
+    reprs = {"netconf": netconf_xml, "restconf": restconf_json,
+             "coreconf": None}
+
+    protocols = {}
+    for p in PROTOCOLS:
+        pid = p["id"]
+        payload = len(raw[pid])
+        protocols[pid] = {
+            "payload": payload,
+            "wire": payload + p["framing"],
+            "repr": reprs[pid],
+        }
+
+    base_p = protocols[BASELINE_PROTOCOL]["payload"]
+    base_w = protocols[BASELINE_PROTOCOL]["wire"]
+
+    def _ratio(a, b):
+        return round(a / b, 1) if b else None
+
+    ratios_payload = {pid: _ratio(protocols[pid]["payload"], base_p)
+                      for pid in PROTOCOL_IDS if pid != BASELINE_PROTOCOL}
+    ratios_wire = {pid: _ratio(protocols[pid]["wire"], base_w)
+                   for pid in PROTOCOL_IDS if pid != BASELINE_PROTOCOL}
+
     return {
-        "netconf": {"payload": nc_p, "wire": nc_w, "xml": netconf_xml},
-        "coreconf": {"payload": cc_p, "wire": cc_w},
-        "ratio_payload": round(nc_p / cc_p, 1) if cc_p else None,
-        "ratio_wire": round(nc_w / cc_w, 1) if cc_w else None,
+        "baseline": BASELINE_PROTOCOL,
+        "protocols": protocols,
+        "ratios_payload": ratios_payload,
+        "ratios_wire": ratios_wire,
     }
 
 
@@ -290,25 +423,31 @@ def sizes(netconf_xml, coreconf_obj, coreconf_is_seq=False):
 #
 #   1. decode   — turn the received message bytes into an in-memory tree.
 #                   NETCONF : parse XML text   (xml.etree.ElementTree)
+#                   RESTCONF: parse JSON text  (json.loads)
 #                   CORECONF: decode CBOR bytes (cbor2)
 #   2. dispatch — resolve every node in the message to its schema node.
 #                   NETCONF : namespaced element localname -> schema (string
 #                             key lookup, after stripping the "{ns}" prefix)
+#                   RESTCONF: JSON object key -> schema (string key lookup,
+#                             after stripping any "module:" prefix)
 #                   CORECONF: numeric SID -> schema          (int key lookup)
 #   3. encode   — serialize the in-memory tree back to message bytes.
 #                   NETCONF : build XML text
+#                   RESTCONF: dump JSON text
 #                   CORECONF: dump CBOR bytes
 #
 # Everything runs in-process so there is no network, SSH, or UDP noise: the
 # number reflects pure codec + schema-dispatch cost. Transport and crypto
-# (SSH vs CoAP/OSCORE) are intentionally excluded — see the README for how
-# to extend the comparison to those.
+# (SSH/TLS vs CoAP/OSCORE) are intentionally excluded — see the README for
+# how to extend the comparison to those. CORECONF is the baseline.
 #
 # Caveat: the ratio reflects these specific Python implementations
-# (xml.etree.ElementTree and cbor2), not the protocols in the abstract.
+# (xml.etree.ElementTree, json, and cbor2), not the protocols in the
+# abstract.
 
 import time
 import xml.etree.ElementTree as ET
+import json as _json_cpu
 
 # name -> schema-node lookup table, modelling the server's schema index. The
 # "schema node" payload is irrelevant to the cost; what matters is a string
@@ -348,6 +487,27 @@ def _cc_dispatch(obj):
     return hits
 
 
+def _rc_localname(key):
+    """Strip a RESTCONF/JSON 'module:local' key down to 'local'."""
+    return key.split(":", 1)[-1] if ":" in key else key
+
+
+def _rc_dispatch(obj):
+    """Walk a decoded RESTCONF (JSON) structure and resolve each object key
+    to its schema node by name — the string-keyed lookup a RESTCONF server
+    performs (after stripping any 'module:' prefix)."""
+    hits = 0
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if _NC_SCHEMA.get(_rc_localname(k)) is not None:
+                hits += 1
+            hits += _rc_dispatch(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            hits += _rc_dispatch(v)
+    return hits
+
+
 def _time_us(fn, iterations):
     """Run fn() `iterations` times, return mean microseconds per call."""
     best = None
@@ -362,62 +522,87 @@ def _time_us(fn, iterations):
     return (best / iterations) * 1e6
 
 
-def processing_costs(netconf_xml, coreconf_obj, coreconf_is_seq=False,
-                     iterations=2000):
-    """Measure and compare server-side CPU for one operation.
+def _xml_stage_times(xml_text, iterations):
+    raw = _as_bytes(xml_text)
+    decode = _time_us(lambda: ET.fromstring(raw), iterations)
+    tree = ET.fromstring(raw)
+    dispatch = _time_us(lambda: _nc_dispatch(tree), iterations)
+    encode = _time_us(lambda: ET.tostring(tree, encoding="utf-8"), iterations)
+    return decode, dispatch, encode
 
-    Returns a dict mirroring sizes(): per-stage microseconds for each
-    protocol, a total, and NETCONF/CORECONF ratios (how many times more CPU
-    NETCONF needs). `iterations` controls the timing loop length.
+
+def _json_stage_times(json_text, iterations):
+    raw = _as_bytes(json_text)
+    if not raw:
+        return 0.0, 0.0, 0.0   # empty body (e.g. a RESTCONF GET request)
+    decode = _time_us(lambda: _json_cpu.loads(raw), iterations)
+    obj = _json_cpu.loads(raw)
+    dispatch = _time_us(lambda: _rc_dispatch(obj), iterations)
+    encode = _time_us(lambda: _json_cpu.dumps(obj, separators=(",", ":")),
+                      iterations)
+    return decode, dispatch, encode
+
+
+def _cbor_stage_times(coreconf_obj, is_seq, iterations):
+    raw = _coreconf_bytes(coreconf_obj, is_seq)
+    raw_b = bytes(raw)
+    if is_seq:
+        decode = _time_us(lambda: decode_cbor_seq(raw_b), iterations)
+        obj = decode_cbor_seq(raw_b)
+        obj = obj[0] if len(obj) == 1 else obj
+    else:
+        decode = _time_us(lambda: cbor2.loads(raw_b), iterations)
+        obj = coreconf_obj
+    dispatch = _time_us(lambda: _cc_dispatch(obj), iterations)
+    encode = _time_us(lambda: cbor2.dumps(obj), iterations)
+    return decode, dispatch, encode
+
+
+def processing_costs(netconf_xml, restconf_json, coreconf_obj,
+                     coreconf_is_seq=False, iterations=2000):
+    """Measure and compare server-side CPU for one operation across all
+    protocols (CORECONF is the baseline).
+
+    Returns a protocol-list-driven dict mirroring sizes():
+
+        {
+          "iterations": int,
+          "baseline": "coreconf",
+          "protocols": {
+             "<id>": {"decode_us", "dispatch_us", "encode_us", "total_us"},
+             ...
+          },
+          "ratios_total": {"netconf": x, "restconf": y},   # vs coreconf
+        }
     """
-    nc_bytes = netconf_xml.encode("utf-8")
-    if coreconf_is_seq:
-        cc_bytes = coreconf_obj if isinstance(coreconf_obj, (bytes, bytearray)) \
-            else cbor_seq(coreconf_obj)
-        cc_obj = decode_cbor_seq(bytes(cc_bytes))
-        cc_obj = cc_obj[0] if len(cc_obj) == 1 else cc_obj
-    else:
-        cc_bytes = cbor2.dumps(coreconf_obj)
-        cc_obj = coreconf_obj
+    stage_times = {
+        "netconf": _xml_stage_times(netconf_xml, iterations),
+        "restconf": _json_stage_times(restconf_json, iterations),
+        "coreconf": _cbor_stage_times(coreconf_obj, coreconf_is_seq,
+                                      iterations),
+    }
 
-    # --- NETCONF (XML) stages --------------------------------------------
-    nc_decode = _time_us(lambda: ET.fromstring(nc_bytes), iterations)
-    nc_tree = ET.fromstring(nc_bytes)
-    nc_dispatch = _time_us(lambda: _nc_dispatch(nc_tree), iterations)
-    nc_encode = _time_us(lambda: ET.tostring(nc_tree, encoding="utf-8"),
-                         iterations)
-
-    # --- CORECONF (CBOR/SID) stages --------------------------------------
-    if coreconf_is_seq:
-        cc_decode = _time_us(lambda: decode_cbor_seq(bytes(cc_bytes)),
-                             iterations)
-    else:
-        cc_decode = _time_us(lambda: cbor2.loads(cc_bytes), iterations)
-    cc_dispatch = _time_us(lambda: _cc_dispatch(cc_obj), iterations)
-    cc_encode = _time_us(lambda: cbor2.dumps(cc_obj), iterations)
-
-    nc_total = nc_decode + nc_dispatch + nc_encode
-    cc_total = cc_decode + cc_dispatch + cc_encode
+    protocols = {}
+    for pid in PROTOCOL_IDS:
+        decode, dispatch, encode = stage_times[pid]
+        total = decode + dispatch + encode
+        protocols[pid] = {
+            "decode_us": round(decode, 3),
+            "dispatch_us": round(dispatch, 3),
+            "encode_us": round(encode, 3),
+            "total_us": round(total, 3),
+        }
 
     def _ratio(a, b):
         return round(a / b, 1) if b else None
 
+    base_total = protocols[BASELINE_PROTOCOL]["total_us"]
+    ratios_total = {pid: _ratio(protocols[pid]["total_us"], base_total)
+                    for pid in PROTOCOL_IDS if pid != BASELINE_PROTOCOL}
+
     return {
         "iterations": iterations,
-        "netconf": {
-            "decode_us": round(nc_decode, 3),
-            "dispatch_us": round(nc_dispatch, 3),
-            "encode_us": round(nc_encode, 3),
-            "total_us": round(nc_total, 3),
-        },
-        "coreconf": {
-            "decode_us": round(cc_decode, 3),
-            "dispatch_us": round(cc_dispatch, 3),
-            "encode_us": round(cc_encode, 3),
-            "total_us": round(cc_total, 3),
-        },
-        "ratio_decode": _ratio(nc_decode, cc_decode),
-        "ratio_dispatch": _ratio(nc_dispatch, cc_dispatch),
-        "ratio_encode": _ratio(nc_encode, cc_encode),
-        "ratio_total": _ratio(nc_total, cc_total),
+        "baseline": BASELINE_PROTOCOL,
+        "protocols": protocols,
+        "ratios_total": ratios_total,
     }
