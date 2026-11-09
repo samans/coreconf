@@ -15,6 +15,7 @@ measures.
 
     python3 bench_processing.py                # default 2000 iterations/stage
     python3 bench_processing.py --iterations 5000
+    python3 bench_processing.py --fleet-size 200   # add a big-GET comparison
     python3 bench_processing.py --json         # machine-readable output
 
 This is Option 1 from the README's "processing power" comparison: an
@@ -31,13 +32,15 @@ import cbor2  # noqa: F401  (imported so a missing dep fails loudly, like server
 
 from coffee_sids import (
     SID_MANAGER, SID_MAKER, SID_ID, SID_POWER, SID_CUPS, SID_STRENGTH,
-    SID_LOCATION, SID_REFILL,
-    STRENGTH_TO_INT,
+    SID_LOCATION, SID_REFILL, SID_MGR_NAME, SID_MAKER_COUNT,
+    SID_STATE, SID_WATER_LEVEL, SID_BEANS_LEVEL, SID_HAS_COFFEE,
+    SID_CUPS_BREWED, SID_IDLE, SID_OFF,
+    STRENGTH_TO_INT, INT_TO_STRENGTH, STATE_NAMES,
     PROTOCOLS, PROTOCOL_IDS, BASELINE_PROTOCOL,
     coreconf_maker_leaf, coreconf_maker_entry,
     netconf_maker_leaf, netconf_maker_entry, netconf_get,
     restconf_maker_leaf, restconf_maker_entry, restconf_action,
-    restconf_get_empty,
+    restconf_get_empty, _rc_dumps,
     processing_costs,
 )
 
@@ -68,6 +71,76 @@ def _refill_bodies(maker_id):
     )
     rc = restconf_action(maker_id, "refill")
     return nc, rc, cc
+
+
+def _large_fleet_get_bodies(n):
+    """Synthesize a GET *response* carrying a fleet of ``n`` makers in all
+    three encodings — the data-bearing direction, where payload size (and so
+    the format's efficiency) actually scales. Mirrors the field set the real
+    GET returns in server.py / flow_client.py.
+
+    Returns (netconf_xml, restconf_json, coreconf_obj)."""
+    makers_cc = []
+    makers_rc = []
+    xml_parts = []
+    for i in range(n):
+        mid = f"maker-{i:04d}"
+        loc = f"Floor {i // 10} Room {i % 10}"
+        power = (i % 2 == 0)
+        cups = (i % 12) + 1
+        strength = i % 3
+        state = SID_IDLE if power else SID_OFF
+        water = (i * 7) % 101
+        beans = (i * 13) % 101
+        has_coffee = water >= 8 and beans >= 5
+        brewed = i * 3
+
+        # CORECONF: SID-keyed CBOR map
+        makers_cc.append({
+            SID_ID: mid, SID_LOCATION: loc, SID_POWER: power,
+            SID_CUPS: cups, SID_STRENGTH: strength, SID_STATE: state,
+            SID_WATER_LEVEL: water, SID_BEANS_LEVEL: beans,
+            SID_HAS_COFFEE: has_coffee, SID_CUPS_BREWED: brewed,
+        })
+        # RESTCONF: JSON object with full node names
+        makers_rc.append({
+            "id": mid, "location": loc, "power": power, "cups": cups,
+            "strength": INT_TO_STRENGTH[strength],
+            "state": STATE_NAMES[state], "water-level": water,
+            "beans-level": beans, "has-coffee": has_coffee,
+            "cups-brewed": brewed,
+        })
+        # NETCONF: XML subtree
+        xml_parts.append(
+            "<coffee-maker>"
+            f"<id>{mid}</id><location>{loc}</location>"
+            f"<power>{'true' if power else 'false'}</power>"
+            f"<cups>{cups}</cups><strength>{INT_TO_STRENGTH[strength]}</strength>"
+            f"<state>{STATE_NAMES[state]}</state>"
+            f"<water-level>{water}</water-level><beans-level>{beans}</beans-level>"
+            f"<has-coffee>{'true' if has_coffee else 'false'}</has-coffee>"
+            f"<cups-brewed>{brewed}</cups-brewed>"
+            "</coffee-maker>"
+        )
+
+    cc_obj = {SID_MANAGER: {SID_MGR_NAME: "barista-fleet",
+                            SID_MAKER_COUNT: n, SID_MAKER: makers_cc}}
+    rc_json = _rc_dumps({
+        "example-coffee-maker:coffee-maker-manager": {
+            "name": "barista-fleet", "maker-count": n,
+            "coffee-maker": makers_rc,
+        }
+    })
+    nc_xml = (
+        '<rpc-reply message-id="101" '
+        'xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><data>'
+        '<coffee-maker-manager xmlns="urn:example:coffee-maker">'
+        '<name>barista-fleet</name>'
+        f'<maker-count>{n}</maker-count>'
+        + "".join(xml_parts) +
+        '</coffee-maker-manager></data></rpc-reply>'
+    )
+    return nc_xml, rc_json, cc_obj
 
 
 def build_operations():
@@ -107,9 +180,13 @@ def build_operations():
     ]
 
 
-def run(iterations):
+def run(iterations, fleet_size=None):
+    ops = build_operations()
+    if fleet_size:
+        nc, rc, cc = _large_fleet_get_bodies(fleet_size)
+        ops.append((f"get large fleet ({fleet_size} makers)", nc, rc, cc))
     results = []
-    for label, nc_xml, rc_json, cc_obj in build_operations():
+    for label, nc_xml, rc_json, cc_obj in ops:
         pc = processing_costs(nc_xml, rc_json, cc_obj, coreconf_is_seq=True,
                               iterations=iterations)
         pc["op"] = label
@@ -172,11 +249,15 @@ def main(argv):
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--iterations", type=int, default=2000,
                     help="timing-loop iterations per stage (default 2000)")
+    ap.add_argument("--fleet-size", type=int, default=None, metavar="N",
+                    help="also benchmark a GET response carrying N makers, "
+                         "to show how each format scales with payload size "
+                         "(e.g. --fleet-size 200)")
     ap.add_argument("--json", action="store_true",
                     help="emit JSON instead of a table")
     args = ap.parse_args(argv)
 
-    results = run(args.iterations)
+    results = run(args.iterations, fleet_size=args.fleet_size)
     if args.json:
         print(json.dumps(results, indent=2))
     else:

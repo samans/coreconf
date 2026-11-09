@@ -716,6 +716,7 @@ function clearEmpty(sel) { const el = sel.querySelector(".empty"); if (el) el.re
 function msgKind(kind) {
   if (kind === "err") return "err";
   if (kind === "netconf" || kind === "NETCONF") return "netconf";
+  if (kind === "restconf" || kind === "RESTCONF") return "restconf";
   return "coreconf";
 }
 // Pretty-print a flat XML string with indentation + line breaks so the

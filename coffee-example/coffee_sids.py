@@ -127,12 +127,19 @@ def cbor_seq(*items):
 
 
 def decode_cbor_seq(data):
-    """Decode a CBOR sequence into a list of items."""
+    """Decode a CBOR sequence (concatenated CBOR items) into a list.
+
+    Advances a single BytesIO in place rather than rebuilding the stream and
+    re-slicing the buffer on each item (the old approach was O(n^2) in the
+    number of items). Note we must use the streaming ``cbor2.load`` here, not
+    ``cbor2.loads``: the latter silently ignores trailing bytes and would
+    drop every item after the first in a multi-item sequence.
+    """
+    stream = io.BytesIO(data)
+    end = len(data)
     items = []
-    while data:
-        stream = io.BytesIO(data)
+    while stream.tell() < end:
         items.append(cbor2.load(stream))
-        data = data[stream.tell():]
     return items
 
 
