@@ -96,11 +96,21 @@ class ServerManager:
             if self.is_running():
                 return False, "already running"
             self.lines = []
+            # aiocoap falls back to the simplesocketserver transport on Windows,
+            # which refuses to bind to the any-address ("::"/"0.0.0.0") and
+            # raises "The transport can not be bound to any-address.". Default
+            # the server's bind host to a concrete loopback address so it starts
+            # there; the manager/clients target coap://localhost which resolves
+            # to 127.0.0.1. An explicit COAP_BIND_HOST in the environment still
+            # wins, so POSIX/Docker setups can keep using "::".
+            env = os.environ.copy()
+            env.setdefault("COAP_BIND_HOST", "127.0.0.1")
             self.proc = subprocess.Popen(
                 [PYTHON, "-u", self.script],
                 cwd=str(EXAMPLE_DIR),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1,
+                env=env,
             )
             threading.Thread(target=self._pump, args=(self.proc,),
                              daemon=True).start()
