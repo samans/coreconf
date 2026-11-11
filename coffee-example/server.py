@@ -22,6 +22,7 @@ Run:
 
 import asyncio
 import logging
+import os
 import time
 
 import cbor2
@@ -370,12 +371,24 @@ def _error(msg):
     return Message(code=Code.BAD_REQUEST, payload=msg.encode())
 
 
+def _display_host(host):
+    """Bracket IPv6 literals for a readable coap:// URI in logs."""
+    return f"[{host}]" if ":" in host else host
+
+
 async def main():
     root = resource.Site()
     root.add_resource([DATASTORE_PATH], DatastoreResource())
-    await Context.create_server_context(root, bind=("::", 5683))
+    # Bind address/port are env-configurable so the example runs where an
+    # IPv6 wildcard ("::") is unavailable or undesired — e.g. a native
+    # Windows host whose "localhost" resolves to IPv4 127.0.0.1 only. Set
+    # COAP_BIND_HOST=127.0.0.1 there so the local clients can reach it.
+    bind = (os.environ.get("COAP_BIND_HOST", "::"),
+            int(os.environ.get("COAP_BIND_PORT", "5683")))
+    await Context.create_server_context(root, bind=bind)
     LOG.info("CORECONF coffee-maker fleet server listening on "
-             "coap://[::]:5683/%s", DATASTORE_PATH)
+             "coap://%s:%d/%s",
+             _display_host(bind[0]), bind[1], DATASTORE_PATH)
     await asyncio.get_running_loop().create_future()  # run forever
 
 

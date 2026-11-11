@@ -38,8 +38,16 @@ EXAMPLE_DIR = HERE.parent
 INDEX_HTML = HERE / "index.html"
 FLOW_CLIENT = HERE / "flow_client.py"
 
-VENV_PY = EXAMPLE_DIR / ".venv" / "bin" / "python3"
-PYTHON = str(VENV_PY) if VENV_PY.exists() else sys.executable
+# The venv interpreter lives in a different place on Windows
+# (.venv\Scripts\python.exe) than on POSIX (.venv/bin/python3). Probe both so
+# spawned subprocesses reuse the venv regardless of platform; fall back to the
+# interpreter running this console.
+_VENV_CANDIDATES = (
+    EXAMPLE_DIR / ".venv" / "Scripts" / "python.exe",   # Windows
+    EXAMPLE_DIR / ".venv" / "bin" / "python3",          # POSIX
+    EXAMPLE_DIR / ".venv" / "bin" / "python",
+)
+PYTHON = next((str(p) for p in _VENV_CANDIDATES if p.exists()), sys.executable)
 
 HTTP_HOST = os.environ.get("WEBUI_HOST", "127.0.0.1")
 HTTP_PORT = int(os.environ.get("WEBUI_PORT", "8080"))
@@ -112,7 +120,17 @@ class ServerManager:
             if not self.is_running():
                 return False, "not running"
             proc = self.proc
-            proc.send_signal(signal.SIGINT)
+            # Ask the server to shut down. On POSIX a SIGINT lets server.py run
+            # its KeyboardInterrupt path; on Windows send_signal(SIGINT) to a
+            # child is not supported (only CTRL_*_EVENT to a process group), so
+            # terminate() is the portable "please stop now" there.
+            try:
+                if os.name == "nt":
+                    proc.terminate()
+                else:
+                    proc.send_signal(signal.SIGINT)
+            except (ProcessLookupError, OSError):
+                pass
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:

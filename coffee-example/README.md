@@ -29,8 +29,9 @@ and the fleet datastore. It then adds **user security** with OSCORE
 | `setup_security.py` | Generates OSCORE security contexts for two users (alice, bob). |
 | `secure_server.py` | OSCORE-protected fleet server with per-user roles (operator vs. viewer). |
 | `secure_client.py` | OSCORE client demonstrating an authorized write (alice) and a denied write (bob). |
-| `run.sh` / `run.bat` / `Dockerfile` | One-command launchers for the web console. |
+| `run.sh` / `run.bat` / `run.ps1` / `run.cmd` / `Dockerfile` | One-command launchers for the web console (`run.ps1`/`run.cmd` are the native-Windows path — see `WINDOWS.md`). |
 | `DOCKER_SHARING.md` | Guide for sharing the Docker image and run instructions for recipients (build, export tarball, or push to a registry). |
+| `WINDOWS.md` | Native Windows 11 guide (no WSL/Docker): prerequisites, `run.ps1`/`run.cmd`, env vars, and packaging as a source zip or offline vendored-deps bundle. |
 
 ## The YANG model
 
@@ -94,12 +95,21 @@ Self-contained — needs **either** Python 3.9+ **or** Docker.
 ```bash
 # macOS / Linux
 ./run.sh
-:: Windows
-run.bat
+```
+```powershell
+# Windows 11 (native, no WSL/Docker) — see WINDOWS.md
+.\run.ps1
+:: or from cmd.exe
+run.cmd
 ```
 
 Creates `.venv/`, installs `aiocoap` + `cbor2` on first run, then serves
 http://localhost:8080. Set `WEBUI_PORT=9000 ./run.sh` to change the port.
+On native Windows, follow [`WINDOWS.md`](WINDOWS.md) — it covers prerequisites
+(Python **3.10+**, no build tools needed), the `run.ps1`/`run.cmd` launchers,
+the `COAP_BIND_HOST`/`WEBUI_HOST` environment variables, and how to package the
+example for a WSL-less machine (source zip or an offline vendored-wheel
+bundle).
 
 ### Option B — Docker (no Python needed on the host)
 
@@ -163,8 +173,9 @@ GET -> manager='barista-1', 4 maker(s):
    {'id': 'breakout', 'state': 'no-water', 'water_level': 5, 'has_coffee': False, ...}
   size for "set maker 'lab' power=True":
     NETCONF  (XML)      payload= 285 B  wire= 373 B
+    RESTCONF (JSON)     payload=  35 B  wire= 185 B
     CORECONF (CBOR/SID) payload=  21 B  wire=  29 B
-    -> CORECONF is 13.6x smaller (payload), 12.9x (wire)
+    -> CORECONF is 13.6x smaller than NETCONF (payload), 12.9x (wire)
 iPATCH turn 'lab' ON -> 2.04 Changed
 POST brew 'lab' -> started=True reason=''
 ```

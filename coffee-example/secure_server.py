@@ -32,6 +32,7 @@ Run:
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 
 import cbor2
@@ -177,15 +178,20 @@ async def main():
     root = resource.Site()
     root.add_resource([DATASTORE_PATH], SecureDatastoreResource())
 
-    ctx = await Context.create_server_context(None, bind=("::", 5683))
+    # Env-configurable bind (see server.py). Use COAP_BIND_HOST=127.0.0.1 on a
+    # native Windows host where "localhost" is IPv4-only.
+    host = os.environ.get("COAP_BIND_HOST", "::")
+    port = int(os.environ.get("COAP_BIND_PORT", "5683"))
+    ctx = await Context.create_server_context(None, bind=(host, port))
     load_server_credentials(ctx)
 
     # Wrap the site so OSCORE-protected requests are unprotected and the
     # authenticated identity is attached to request.remote before routing.
     ctx.serversite = OscoreSiteWrapper(root, ctx.server_credentials)
 
-    LOG.info("Secure CORECONF server on coap://[::]:5683/%s (OSCORE only)",
-             DATASTORE_PATH)
+    disp = f"[{host}]" if ":" in host else host
+    LOG.info("Secure CORECONF server on coap://%s:%d/%s (OSCORE only)",
+             disp, port, DATASTORE_PATH)
     await asyncio.get_running_loop().create_future()
 
 

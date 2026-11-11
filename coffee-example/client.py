@@ -12,9 +12,9 @@ Demonstrates the CORECONF workflow against server.py:
   4. GET again to confirm the new state / remaining coffee.
   5. Turn the maker OFF.
 
-For each mutation it prints the encoded size of the equivalent NETCONF (XML)
-message and the CORECONF (CBOR/SID) message, so you can see how much smaller
-CORECONF is for the same operation.
+For each mutation it prints the encoded size of the equivalent NETCONF (XML),
+RESTCONF (JSON), and CORECONF (CBOR/SID) messages, so you can see how much
+smaller CORECONF is for the same operation.
 
 All payloads are CBOR keyed by numeric YANG SIDs (RFC 9254 / RFC 9595).
 
@@ -37,7 +37,7 @@ from coffee_sids import (
     INT_TO_STRENGTH, STATE_NAMES,
     CF_YANG_INSTANCES_SEQ, CF_YANG_DATA_CBOR, DATASTORE_PATH,
     coreconf_maker_leaf, coreconf_maker_entry,
-    netconf_maker_leaf, sizes,
+    netconf_maker_leaf, restconf_maker_leaf, sizes,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -63,14 +63,18 @@ def _pretty_maker(m):
 
 
 def _report_sizes(label, s):
-    nc, cc = s["netconf"], s["coreconf"]
+    protos = s["protocols"]
+    nc, rc, cc = protos["netconf"], protos["restconf"], protos["coreconf"]
     LOG.info("  size for '%s':", label)
     LOG.info("    NETCONF  (XML)      payload=%4d B  wire=%4d B",
              nc["payload"], nc["wire"])
+    LOG.info("    RESTCONF (JSON)     payload=%4d B  wire=%4d B",
+             rc["payload"], rc["wire"])
     LOG.info("    CORECONF (CBOR/SID) payload=%4d B  wire=%4d B",
              cc["payload"], cc["wire"])
-    LOG.info("    -> CORECONF is %sx smaller (payload), %sx (wire)",
-             s["ratio_payload"], s["ratio_wire"])
+    LOG.info("    -> CORECONF is %sx smaller than NETCONF (payload), "
+             "%sx (wire)",
+             s["ratios_payload"]["netconf"], s["ratios_wire"]["netconf"])
 
 
 async def get_all(ctx):
@@ -100,8 +104,9 @@ async def _ipatch(ctx, body, label):
 async def set_power(ctx, maker_id, on):
     cc_body = coreconf_maker_leaf(maker_id, SID_POWER, on)
     nc_xml = netconf_maker_leaf(maker_id, "power", on)
+    rc_json = restconf_maker_leaf(maker_id, "power", on)
     _report_sizes(f"set maker '{maker_id}' power={on}",
-                  sizes(nc_xml, cc_body, coreconf_is_seq=True))
+                  sizes(nc_xml, rc_json, cc_body, coreconf_is_seq=True))
     verb = "ON" if on else "OFF"
     return await _ipatch(ctx, cc_body, f"iPATCH turn '{maker_id}' {verb}")
 
