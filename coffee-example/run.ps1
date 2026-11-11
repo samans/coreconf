@@ -80,7 +80,13 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # --- install dependencies (first run only) --------------------------------
-& $venvPython -c "import aiocoap, cbor2" 2>$null
+# Probe for the deps. The import deliberately fails on first run, which makes
+# Python print a Traceback to stderr. Under $ErrorActionPreference = "Stop",
+# native-command stderr is promoted to a terminating error, so we must run the
+# probe with ErrorAction SilentlyContinue and discard stderr via *> to keep
+# the script alive and fall through to the install step.
+$LASTEXITCODE = 0
+& $venvPython -c "import aiocoap, cbor2" *> $null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[run] installing dependencies..."
     & $venvPython -m pip install --quiet --upgrade pip
