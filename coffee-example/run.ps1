@@ -38,6 +38,24 @@ param(
 $ErrorActionPreference = "Stop"
 Set-Location -LiteralPath $PSScriptRoot
 
+# Run a native command whose stderr output is expected and harmless (e.g. a
+# probe import that may fail). With $ErrorActionPreference = "Stop", PowerShell
+# promotes a native command's stderr to a terminating NativeCommandError, which
+# would abort the script. We locally relax that to "Continue" so only the exit
+# code matters. Returns the command's exit code.
+function Invoke-Probe {
+    param([string]$Exe, [string[]]$Arguments)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $Exe @Arguments 2>&1 | Out-Null
+        return $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
 # --- locate a Python interpreter -----------------------------------------
 # Prefer the 'py' launcher (ships with python.org installers); fall back to
 # python.exe on PATH. We ask for 3.10+ explicitly where we can.
@@ -72,22 +90,20 @@ if (-not (Test-Path -LiteralPath $venvPython)) {
 }
 
 # Enforce the verified minimum runtime (both deps require Python >= 3.10).
-$verOk = & $venvPython -c "import sys; sys.exit(0 if sys.version_info[:2] >= (3,10) else 1)"
-if ($LASTEXITCODE -ne 0) {
+$verExit = Invoke-Probe $venvPython @("-c", "import sys; sys.exit(0 if sys.version_info[:2] >= (3,10) else 1)")
+if ($verExit -ne 0) {
     $ver = & $venvPython -c "import sys; print('%d.%d' % sys.version_info[:2])"
     Write-Error "error: Python 3.10+ required (aiocoap and cbor2 need >=3.10); .venv has $ver. Delete .venv and re-run with a newer Python."
     exit 1
 }
 
 # --- install dependencies (first run only) --------------------------------
-# Probe for the deps. The import deliberately fails on first run, which makes
-# Python print a Traceback to stderr. Under $ErrorActionPreference = "Stop",
-# native-command stderr is promoted to a terminating error, so we must run the
-# probe with ErrorAction SilentlyContinue and discard stderr via *> to keep
-# the script alive and fall through to the install step.
-$LASTEXITCODE = 0
-& $venvPython -c "import aiocoap, cbor2" *> $null
-if ($LASTEXITCODE -ne 0) {
+# The probe import deliberately fails on first run (deps not installed yet),
+# which makes Python print a Traceback to stderr. Invoke-Probe runs it with a
+# relaxed ErrorActionPreference so that expected stderr does not abort the
+# script; we branch on the exit code and fall through to the install step.
+$depExit = Invoke-Probe $venvPython @("-c", "import aiocoap, cbor2")
+if ($depExit -ne 0) {
     Write-Host "[run] installing dependencies..."
     & $venvPython -m pip install --quiet --upgrade pip
     & $venvPython -m pip install --quiet -r requirements.txt
